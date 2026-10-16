@@ -1,8 +1,9 @@
 from datetime import date
 import json
 
-from optinfo import pipeline, sources
+from optinfo import pipeline, sources, harness
 from optinfo.harness import parse_json_response
+import pytest
 from optinfo.catalog import match_companies
 
 
@@ -102,3 +103,53 @@ def test_optics_coherent_word_is_not_company():
     assert "coherent" not in match_companies("Coherent and incoherent scattering in intelligent materials")
     assert "intel" not in match_companies("intelligent materials")
     assert "coherent" in match_companies("Coherent Corp announced a laser")
+
+
+def complete_analysis():
+    return analysis(tags=[], company_mentions=[])
+
+
+def test_json_error_regenerates_once_with_same_evidence(monkeypatch, tmp_path):
+    calls = []
+    responses = iter(['{"title":"bad \\mu escape"}', json.dumps(complete_analysis(), ensure_ascii=False)])
+    def run(prompt, home, **kwargs):
+        calls.append((prompt, kwargs))
+        return next(responses)
+    monkeypatch.setattr(harness, "_run", run)
+    monkeypatch.setattr(harness, "runtime_root", lambda: tmp_path)
+    value = harness.analyze_candidate(sample(), ["超快动力学"], "2026-10-16")
+    assert value["publish"] is True and len(calls) == 2
+    assert "A real abstract" in calls[0][0] and "A real abstract" in calls[1][0]
+    assert "bad" not in calls[1][0]  # Failed model text is never promoted to evidence.
+    assert calls[0][1]["max_tokens"] == 8000
+
+
+def test_truncated_output_never_filled_and_retry_bounded(monkeypatch, tmp_path):
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(1)
+        return '{"title":"valid title","summary":"unfinished'
+    monkeypatch.setattr(harness, "_run", run)
+    monkeypatch.setattr(harness, "runtime_root", lambda: tmp_path)
+    with pytest.raises(harness.StructuredOutputError) as raised:
+        harness.analyze_candidate(sample(), [], "2026-10-16")
+    assert len(calls) == 2
+    assert harness.safe_error_details(raised.value) == {"error": "StructuredOutputError", "stage": "parse", "exception_type": "JSONDecodeError", "attempts": 2}
+
+
+def test_schema_rejects_wrong_boolean_and_missing_fields():
+    bad = complete_analysis()
+    bad["publish"] = "true"
+    with pytest.raises(ValueError):
+        harness.validate_analysis(bad)
+    bad = complete_analysis()
+    del bad["content"]["assessment"]
+    with pytest.raises(ValueError):
+        harness.validate_analysis(bad)
+
+
+def test_diagnostics_never_contains_exception_payload():
+    error = harness.HarnessUnavailable("secret=sk-should-not-leak raw article", stage="run", exception_type="SdkProtocolError", finish_reason="error")
+    value = harness.safe_error_details(error)
+    assert "secret" not in json.dumps(value)
+    assert value["stage"] == "run" and value["finish_reason"] == "error"

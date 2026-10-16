@@ -27,7 +27,8 @@ id optinfo >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /shar
 uid=$(id -u optinfo); gid=$(id -g optinfo)
 grep -q '^optinfo:' "$ROOT/etc/passwd" || printf 'optinfo:x:%s:%s:Optinfo:/data:/usr/sbin/nologin\n' "$uid" "$gid" >> "$ROOT/etc/passwd"
 grep -q '^optinfo:' "$ROOT/etc/group" || printf 'optinfo:x:%s:\n' "$gid" >> "$ROOT/etc/group"
-chown -R "$uid:$gid" "$ROOT/data" "$ROOT/config" '/share/xdq/DeepSeek Harness'
+mkdir -p '/share/xdq/DeepSeek Harness/optinfo-runtime'
+chown -R "$uid:$gid" "$ROOT/data" "$ROOT/config" '/share/xdq/DeepSeek Harness/optinfo-runtime'
 chmod 700 "$ROOT/config"
 chroot --userspec="$uid:$gid" "$ROOT" /harness/venv/bin/python -c 'import deepseek_harness; print("Harness Python import OK")'
 printf 'Runtime ready; service uid=%s gid=%s\n' "$uid" "$gid"

@@ -8,7 +8,7 @@ import re
 from zoneinfo import ZoneInfo
 
 from .catalog import COMPANIES, TOPICS, match_companies
-from .harness import HarnessUnavailable, analyze_candidate, is_configured
+from .harness import HarnessUnavailable, analyze_candidate, is_configured, safe_error_details
 from .sources import collect, enrich
 
 def score_candidate(item: dict, topic_ids: list[str]) -> float:
@@ -111,7 +111,7 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
             diagnostics.append({"item": candidate["id"], "status": "published" if item else "filtered", "access": candidate.get("access_status", "")})
         except Exception as exc:
             failures += 1
-            diagnostics.append({"item": candidate["id"], "status": "model_failed", "error": type(exc).__name__})
+            diagnostics.append({"item": candidate["id"], "status": "model_failed", **safe_error_details(exc)})
             # Avoid billing/retrying an outage for the whole candidate set.
             if failures >= 3 and not items:
                 raise HarnessUnavailable("Harness 连续失败；保留已有简报，等待下一次重试。") from None

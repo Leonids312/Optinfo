@@ -1,34 +1,52 @@
 {
   "schema_version": 1,
   "verified_at": "2026-10-16",
-  "purpose": "企业图鉴的公开招聘薪酬证据；尚未自动合并进 companies.json。",
+  "purpose": "企业图鉴公开招聘薪酬证据；对应展示记录已合并至 companies.json。",
   "interpretation": "以下是特定招聘届次与岗位的用人单位公告口径，不是全体员工平均工资，也不是当前录用承诺。浮动奖金、补贴与固定收入分别记录；原文未说明税前税后时不自行认定。",
   "entries": [
     {
       "suggested_company_id": "charming-globe",
       "company_name": "长光卫星技术股份有限公司",
-      "sectors": ["商业遥感卫星", "光学设计与制造", "计算成像"],
+      "sectors": [
+        "商业遥感卫星",
+        "光学设计与制造",
+        "计算成像"
+      ],
       "recruitment_cohort": "2025届校园招聘",
       "source_published_at": "2024-08-01",
       "location": "吉林省长春市",
-      "roles": ["光学设计工程师", "光学制造工程师", "计算成像系统开发", "光通信工程师等校招岗位"],
+      "roles": [
+        "光学设计工程师",
+        "光学制造工程师",
+        "计算成像系统开发",
+        "光通信工程师等校招岗位"
+      ],
       "currency": "CNY",
       "tax_status": "explicit_pre_tax",
       "employment_stage": "转正后",
       "masters": {
         "monthly_salary_cny": 20000,
-        "performance_bonus_months": [4, 8],
+        "performance_bonus_months": [
+          4,
+          8
+        ],
         "employer_estimated_annual_income_cny": 360000,
         "display": "转正后税前2万元/月，另有4–8个月工资的绩效奖金；公告预估平均36万元/年。"
       },
       "phd": {
         "monthly_salary_cny": 21000,
-        "performance_bonus_months": [6, 12],
+        "performance_bonus_months": [
+          6,
+          12
+        ],
         "employer_estimated_annual_income_cny": 420000,
         "display": "转正后税前2.1万元/月，另有6–12个月工资的绩效奖金；公告预估平均42万元/年。"
       },
       "basis": "公告明确税前月薪和绩效奖金月数，年度金额是用人单位预估；没有把地方补贴或优秀绩效上限当作基本工资。",
-      "notes": ["2025届招聘历史记录，不能直接标作2026年现行薪酬。", "适用于公告覆盖的校招岗位；具体岗位与个人录用条件仍可能不同。"],
+      "notes": [
+        "2025届招聘历史记录，不能直接标作2026年现行薪酬。",
+        "适用于公告覆盖的校招岗位；具体岗位与个人录用条件仍可能不同。"
+      ],
       "sources": [
         {
           "title": "华东师范大学就业信息网：长光卫星2025届校园招聘",
@@ -41,24 +59,46 @@
     {
       "suggested_company_id": "atoman",
       "company_name": "埃特曼半导体技术有限公司",
-      "sectors": ["化合物半导体", "分子束外延", "GaAs/InP与氮化物外延"],
+      "sectors": [
+        "化合物半导体",
+        "分子束外延",
+        "GaAs/InP与氮化物外延"
+      ],
       "recruitment_cohort": "2027届校园秋季招聘",
       "source_published_at": "2026-07-03",
       "location": "北京：系统类；福建省厦门市：工艺类",
-      "roles": ["系统研发工程师", "模拟仿真工程师", "GaAs/InP外延研发工程师", "氮化物外延研发工程师", "测试工程师"],
+      "roles": [
+        "系统研发工程师",
+        "模拟仿真工程师",
+        "GaAs/InP外延研发工程师",
+        "氮化物外延研发工程师",
+        "测试工程师"
+      ],
       "currency": "CNY",
       "tax_status": "explicit_pre_tax",
       "masters": {
-        "monthly_salary_range_cny": [12000, 25000],
-        "performance_bonus_months": [1, 3],
+        "monthly_salary_range_cny": [
+          12000,
+          25000
+        ],
+        "performance_bonus_months": [
+          1,
+          3
+        ],
         "display": "税前1.2–2.5万元/月，另有1–3个月工资的绩效奖金。"
       },
       "phd": {
-        "annual_salary_range_cny": [400000, 600000],
+        "annual_salary_range_cny": [
+          400000,
+          600000
+        ],
         "display": "公告税前年薪40–60万元；未细分固定工资和浮动部分。"
       },
       "basis": "硕士按税前月薪及奖金月数记录；博士按公告税前年薪记录。绩效奖金不视为保底，优秀者股权激励不折算现金。",
-      "notes": ["按2026年7月发布的2027届招聘公告记录。", "同一公告覆盖北京系统类和厦门工艺类，未按城市分别公布薪酬。"],
+      "notes": [
+        "按2026年7月发布的2027届招聘公告记录。",
+        "同一公告覆盖北京系统类和厦门工艺类，未按城市分别公布薪酬。"
+      ],
       "sources": [
         {
           "title": "吉林大学就业网：埃特曼半导体2027校园秋季招聘简章",
@@ -71,24 +111,41 @@
     {
       "suggested_company_id": "qiwang-optics",
       "company_name": "北京启望精密光学科技有限公司",
-      "sectors": ["半导体晶圆缺陷检测镜头", "精密光学", "光学检测与装调装备"],
+      "sectors": [
+        "半导体晶圆缺陷检测镜头",
+        "精密光学",
+        "光学检测与装调装备"
+      ],
       "recruitment_cohort": "2026届春季校园招聘",
       "source_published_at": "2026-03-19",
       "location": "北京市",
-      "roles": ["光学设计研发岗", "光学仪器研发岗", "光学镀膜工艺研发岗等"],
+      "roles": [
+        "光学设计研发岗",
+        "光学仪器研发岗",
+        "光学镀膜工艺研发岗等"
+      ],
       "currency": "CNY",
       "tax_status": "not_stated_in_source",
       "masters": {
-        "annual_base_salary_range_cny": [180000, 280000],
+        "annual_base_salary_range_cny": [
+          180000,
+          280000
+        ],
         "display": "公告基本工资18–28万元/年，另有绩效奖金；原文未注明税前税后。"
       },
       "phd": {
-        "annual_base_salary_range_cny": [300000, 380000],
+        "annual_base_salary_range_cny": [
+          300000,
+          380000
+        ],
         "display": "公告基本工资30–38万元/年，另有绩效奖金；原文未注明税前税后。"
       },
       "performance_bonus": "公告说明年平均绩效奖金为4个月基本工资；完成一年培训并通过考核后才参加绩效考核并享受绩效奖金。",
       "basis": "年度基本工资，不是综合年薪；不把4个月平均绩效直接加作首年保底，也不自行标注税前。",
-      "notes": ["网页顶部8000–10000元和本科筛选信息不能代替正文硕博招聘薪酬。", "若企业图鉴要求全部以明确税前口径比较，本条应保留为待核实，不与前两条直接排序。"],
+      "notes": [
+        "网页顶部8000–10000元和本科筛选信息不能代替正文硕博招聘薪酬。",
+        "若企业图鉴要求全部以明确税前口径比较，本条应保留为待核实，不与前两条直接排序。"
+      ],
       "sources": [
         {
           "title": "河北工业大学就业信息网：启望精密2026届春季校园招聘简章",

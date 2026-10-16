@@ -7,7 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class LifecycleApi extends Api {
   final List<Map<String, String>> queries = [];
-  LifecycleApi()
+  final String editionStatus;
+  final List<Json> items;
+  LifecycleApi({this.editionStatus = 'ready', this.items = const []})
       : super(ConnectionStore()
           ..base = 'https://example.invalid'
           ..token = 'test-only');
@@ -19,7 +21,15 @@ class LifecycleApi extends Api {
     }
     if (path == '/api/briefing') {
       queries.add(Map<String, String>.from(query!));
-      return {'date': query['date'], 'items': [], 'status': 'ready'};
+      return {
+        'date': query['date'],
+        'items': items
+            .where((item) =>
+                (query['section'] ?? '').isEmpty ||
+                item['section'] == query['section'])
+            .toList(),
+        'status': editionStatus,
+      };
     }
     throw StateError('Unexpected test API path: $path');
   }
@@ -47,6 +57,62 @@ class TestApi extends Api {
 }
 
 void main() {
+  for (final (status, expectedTitle) in [
+    ('ready', '今天暂无新内容'),
+    ('not_generated', '今天的简报还未就绪'),
+  ]) {
+    testWidgets('empty $status edition displays its actual generation state',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(
+          home: HomeScreen(api: LifecycleApi(editionStatus: status))));
+      await tester.pumpAndSettle();
+      expect(find.text(expectedTitle), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets(
+      'partial edition renders each article once and empty sections remain distinct from missing editions',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final api = LifecycleApi(editionStatus: 'partial', items: [
+      {
+        'id': 'test-paper',
+        'title': '一条测试研究资讯',
+        'section': 'research',
+        'kind': 'paper',
+        'summary': '仅用于界面测试。'
+      },
+    ]);
+    await tester.pumpWidget(MaterialApp(home: HomeScreen(api: api)));
+    await tester.pumpAndSettle();
+    expect(find.text('已生成部分内容，后续会自动补齐。'), findsOneWidget);
+    expect(find.byType(NewsCard), findsOneWidget);
+    await tester.tap(find.widgetWithText(ChoiceChip, '重大事件'));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无达到筛选标准的重大事件'), findsOneWidget);
+    expect(find.text('今天的简报还未就绪'), findsNothing);
+    await tester.tap(find.widgetWithText(ChoiceChip, '产业动态'));
+    await tester.pumpAndSettle();
+    expect(find.text('该分区暂无新内容'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ChoiceChip, '研究进展'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NewsCard), findsOneWidget);
+    await tester.tap(find.text('历史'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NewsCard), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'resume keeps a historical date but today requests the current Shanghai day',
       (tester) async {

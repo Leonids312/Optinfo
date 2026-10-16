@@ -680,7 +680,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _feed() {
     final visible =
         _items.where((i) => _section.isEmpty || i.section == _section).toList();
+    final status = string(_briefing['status']);
+    final editionMissing = status == 'missing' || status == 'not_generated';
+    final editionExists = status == 'ready' || status == 'partial';
     if (visible.isEmpty) {
+      final todayTitle = editionMissing
+          ? '今天的简报还未就绪'
+          : editionExists
+              ? _section == 'world'
+                  ? '暂无达到筛选标准的重大事件'
+                  : _section.isNotEmpty
+                      ? '该分区暂无新内容'
+                      : '今天暂无新内容'
+              : '暂时无法读取今日简报';
+      final todayMessage = editionMissing
+          ? '服务器每天 04:00（北京时间）生成内容。生成后点击刷新即可阅读。'
+          : editionExists
+              ? '目前没有符合条件的新资讯。可以查看其他分区，或稍后刷新。'
+              : '请检查连接状态后刷新重试。';
       return EmptyState(
         icon: _page == 3
             ? Icons.bookmark_border_rounded
@@ -690,18 +707,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             : _page == 3
                 ? '还没有收藏的资讯'
                 : _page == 0
-                    ? '今天的简报还未就绪'
+                    ? todayTitle
                     : '没有找到相关资讯',
         message: _loading
             ? '稍候片刻，好内容正在路上。'
             : _page == 0
-                ? '服务器每天 04:00（北京时间）生成内容。生成后点击刷新即可阅读。'
+                ? todayMessage
                 : '试试其他日期、关键词或筛选条件。',
       );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_page == 0 && status == 'partial') ...[
+          const StatusNotice(message: '已生成部分内容，后续会自动补齐。'),
+          const SizedBox(height: 16),
+        ],
         Row(
           children: [
             Text(
@@ -720,7 +741,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ],
         ),
         const SizedBox(height: 14),
-        if (_page == 0 && _section.isEmpty)
+        if (_page == 0 && _section.isEmpty) ...[
           for (final entry in sectionNames.entries)
             if (visible.any((item) => item.section == entry.key)) ...[
               Padding(
@@ -735,8 +756,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               for (final item
                   in visible.where((item) => item.section == entry.key))
                 _itemCard(item),
-            ] else
-              for (final item in visible) _itemCard(item),
+            ],
+        ] else
+          for (final item in visible) _itemCard(item),
       ],
     );
   }

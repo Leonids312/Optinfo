@@ -280,12 +280,16 @@
       "等离子体刻蚀设备",
       "MOCVD 与薄膜沉积设备"
     ],
-    "listed": null,
-    "listing": "上市状态与证券信息以公司投资者关系资料为准",
+    "listed": true,
+    "listing": "上海证券交易所科创板，股票代码 688012；2019-07-22 上市。",
     "sources": [
       {
         "title": "中微公司官网及产品",
         "url": "https://www.amec-inc.com/"
+      },
+      {
+        "title": "上海证券交易所：中微公司概况（状态：上市）",
+        "url": "https://www.sse.com.cn/assortment/stock/list/info/company/index.shtml?COMPANY_CODE=688012"
       }
     ]
   },
