@@ -1,0 +1,11 @@
+[Unit]
+Description=Optinfo daily briefing at 04:00 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+AccuracySec=1min
+Unit=optinfo-generate.service
+
+[Install]
+WantedBy=timers.target

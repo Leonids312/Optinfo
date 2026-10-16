@@ -1,0 +1,11 @@
+[Unit]
+Description=Optinfo hourly major event check
+
+[Timer]
+OnCalendar=*-*-* *:20:00
+Persistent=true
+AccuracySec=1min
+Unit=optinfo-events.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,35 @@
+{
+    "name": "Optinfo",
+    "short_name": "Optinfo",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#F7F8F4",
+    "theme_color": "#257568",
+    "description": "光学、半导体与重大事件的私人资讯简报。",
+    "orientation": "any",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}

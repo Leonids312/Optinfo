@@ -1,0 +1,81 @@
+name: Build and test Optinfo
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -r backend/requirements.txt
+      - run: python -m pytest backend/tests -q
+  client:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        if: runner.os == 'Linux'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Checkout pinned Flutter SDK
+        uses: actions/checkout@v4
+        with:
+          repository: flutter/flutter
+          ref: abaf9c523780a608bd46686fd5e53740a07077f8
+          path: .flutter
+      - name: Add Flutter to PATH
+        shell: pwsh
+        run: Add-Content -LiteralPath $env:GITHUB_PATH -Value "$env:GITHUB_WORKSPACE/.flutter/bin"
+      - uses: actions/cache@v4
+        with:
+          path: .flutter/bin/cache
+          key: flutter-3.47.7-${{ runner.os }}
+      - run: flutter --version
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - name: Restore private Android signing key
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE"
+          printf '%s' "$KEYSTORE" | base64 --decode > android/app/release.p12
+          printf 'storeFile=release.p12\nstoreType=PKCS12\nstorePassword=%s\nkeyPassword=%s\nkeyAlias=optinfo\n' "$STORE_PASSWORD" "$STORE_PASSWORD" > android/key.properties
+      - name: Build Android
+        if: runner.os == 'Linux'
+        run: flutter build apk --release
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        run: flutter build windows --release
+      - name: Zip Windows program
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath Optinfo-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: Optinfo-Windows-x64
+          path: client/Optinfo-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: Optinfo-Android
+          path: client/build/app/outputs/flutter-apk/app-release.apk

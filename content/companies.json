@@ -1,0 +1,288 @@
+[
+  {
+    "id": "asml",
+    "name": "阿斯麦",
+    "name_en": "ASML",
+    "aliases": [
+      "ASML"
+    ],
+    "website": "https://www.asml.com/",
+    "logo_url": "https://www.asml.com/favicon.ico",
+    "description": "荷兰半导体设备企业，向芯片制造商提供光刻系统、计算光刻、测量和检测服务。",
+    "businesses": [
+      "EUV / DUV 光刻系统",
+      "计算光刻",
+      "套刻与电子束检测"
+    ],
+    "listed": true,
+    "listing": "上市公司；证券详情见官方投资者关系页面",
+    "sources": [
+      {
+        "title": "ASML 公司介绍",
+        "url": "https://www.asml.com/en/company/about-asml"
+      },
+      {
+        "title": "ASML 投资者关系",
+        "url": "https://investor.asml.com/"
+      }
+    ]
+  },
+  {
+    "id": "zeiss",
+    "name": "蔡司",
+    "name_en": "ZEISS",
+    "aliases": [
+      "Carl Zeiss"
+    ],
+    "website": "https://www.zeiss.com/",
+    "logo_url": "",
+    "description": "由卡尔蔡司基金会持有的光学与光电技术集团，覆盖半导体制造光学、工业测量、科研显微、医疗和消费光学。集团与上市子公司应分别识别。",
+    "businesses": [
+      "半导体制造光学",
+      "工业质量与科研",
+      "医疗技术",
+      "消费光学"
+    ],
+    "listed": false,
+    "listing": "ZEISS 集团由基金会持有；部分子公司独立上市",
+    "sources": [
+      {
+        "title": "ZEISS 集团介绍与所有权",
+        "url": "https://www.zeiss.com/corporate/en/about-zeiss.html"
+      }
+    ]
+  },
+  {
+    "id": "coherent",
+    "name": "高意",
+    "name_en": "Coherent",
+    "aliases": [
+      "Coherent Corp"
+    ],
+    "website": "https://www.coherent.com/",
+    "logo_url": "https://www.coherent.com/content/dam/coherent/site/en/images/icons/favicons/apple-icon-144x144.png",
+    "description": "光子技术企业，业务面向数据中心、通信和工业市场，提供光连接、精密激光及工程材料。",
+    "businesses": [
+      "光通信与数据中心互连",
+      "工业和科研激光",
+      "工程材料"
+    ],
+    "listed": true,
+    "listing": "上市公司；详情见投资者关系页面",
+    "sources": [
+      {
+        "title": "Coherent 公司介绍",
+        "url": "https://www.coherent.com/company"
+      },
+      {
+        "title": "Coherent 投资者关系",
+        "url": "https://ir.coherent.com/"
+      }
+    ]
+  },
+  {
+    "id": "hamamatsu",
+    "name": "滨松光子学",
+    "name_en": "Hamamatsu Photonics",
+    "aliases": [
+      "Hamamatsu",
+      "滨松"
+    ],
+    "website": "https://www.hamamatsu.com/",
+    "logo_url": "https://www.hamamatsu.com/content/dam/hamamatsu-photonics/system/images/logo.svg",
+    "description": "日本光电技术企业，提供光传感器、相机、光源、激光及光测量系统，服务科研、工业、医疗和半导体制造。",
+    "businesses": [
+      "光电倍增管与半导体探测器",
+      "科学相机",
+      "X 射线与 EUV 光源",
+      "光谱和测量系统"
+    ],
+    "listed": null,
+    "listing": "请以官方投资者关系最新资料为准",
+    "sources": [
+      {
+        "title": "滨松光子学公司与产品",
+        "url": "https://www.hamamatsu.com/us/en/our-company.html"
+      }
+    ]
+  },
+  {
+    "id": "tsmc",
+    "name": "台积电",
+    "name_en": "TSMC",
+    "aliases": [
+      "Taiwan Semiconductor",
+      "台積電"
+    ],
+    "website": "https://www.tsmc.com/",
+    "logo_url": "",
+    "description": "专业集成电路制造服务企业，提供晶圆代工、制程技术及先进封装服务。",
+    "businesses": [
+      "晶圆代工",
+      "先进制程",
+      "先进封装"
+    ],
+    "listed": true,
+    "listing": "上市公司；证券详情见官方投资者关系页面",
+    "sources": [
+      {
+        "title": "TSMC 公司介绍",
+        "url": "https://www.tsmc.com/english/aboutTSMC"
+      },
+      {
+        "title": "TSMC 投资者关系",
+        "url": "https://investor.tsmc.com/english"
+      }
+    ]
+  },
+  {
+    "id": "applied-materials",
+    "name": "应用材料",
+    "name_en": "Applied Materials",
+    "aliases": [
+      "Applied Materials"
+    ],
+    "website": "https://www.appliedmaterials.com/",
+    "logo_url": "",
+    "description": "材料工程设备与服务企业，面向芯片及显示制造，提供沉积、材料改性、去除和工艺控制等技术。",
+    "businesses": [
+      "半导体制造设备",
+      "材料工程",
+      "工艺控制",
+      "设备服务"
+    ],
+    "listed": true,
+    "listing": "上市公司；证券详情见官方投资者关系页面",
+    "sources": [
+      {
+        "title": "Applied Materials 公司介绍",
+        "url": "https://www.appliedmaterials.com/us/en/about.html"
+      },
+      {
+        "title": "Applied Materials 投资者关系",
+        "url": "https://ir.appliedmaterials.com/"
+      }
+    ]
+  },
+  {
+    "id": "nvidia",
+    "name": "英伟达",
+    "name_en": "NVIDIA",
+    "aliases": [
+      "NVIDIA"
+    ],
+    "website": "https://www.nvidia.com/",
+    "logo_url": "https://nvidianews.nvidia.com/media/sites/219/images/itouch.png",
+    "description": "GPU 加速计算与人工智能平台企业，服务数据中心、游戏、专业可视化和汽车等市场。",
+    "businesses": [
+      "GPU 与加速计算",
+      "数据中心与网络",
+      "专业可视化",
+      "汽车计算"
+    ],
+    "listed": true,
+    "listing": "上市公司；证券详情见官方投资者关系页面",
+    "sources": [
+      {
+        "title": "NVIDIA 公司与投资者资料",
+        "url": "https://investor.nvidia.com/home/default.aspx"
+      }
+    ]
+  },
+  {
+    "id": "amd",
+    "name": "超威半导体",
+    "name_en": "AMD",
+    "aliases": [
+      "Advanced Micro Devices"
+    ],
+    "website": "https://www.amd.com/",
+    "logo_url": "https://d1io3yog0oux5.cloudfront.net/_d22fb6007d12335ff19068b92f2958b1/amd/files/theme/images/favicons/apple-touch-icon.png",
+    "description": "计算芯片企业，产品覆盖数据中心、客户端、游戏及嵌入式计算。",
+    "businesses": [
+      "CPU",
+      "GPU 与 AI 加速器",
+      "嵌入式与自适应计算"
+    ],
+    "listed": true,
+    "listing": "上市公司；证券详情见官方投资者关系页面",
+    "sources": [
+      {
+        "title": "AMD 投资者关系与业务资料",
+        "url": "https://ir.amd.com/"
+      }
+    ]
+  },
+  {
+    "id": "intel",
+    "name": "英特尔",
+    "name_en": "Intel",
+    "aliases": [
+      "Intel Corporation"
+    ],
+    "website": "https://www.intel.com/",
+    "logo_url": "https://d1io3yog0oux5.cloudfront.net/_55d7c77db61d0836bb9bcea650fc712a/intel/files/theme/images/favicons/favicon-32x32.png",
+    "description": "半导体设计与制造企业，业务包括计算处理器及晶圆制造服务。业务组织和财务情况以最新公告为准。",
+    "businesses": [
+      "客户端与数据中心计算",
+      "半导体制造与代工"
+    ],
+    "listed": true,
+    "listing": "上市公司；证券详情见官方投资者关系页面",
+    "sources": [
+      {
+        "title": "Intel 投资者关系",
+        "url": "https://www.intc.com/"
+      }
+    ]
+  },
+  {
+    "id": "trumpf",
+    "name": "通快",
+    "name_en": "TRUMPF",
+    "aliases": [
+      "TRUMPF"
+    ],
+    "website": "https://www.trumpf.com/",
+    "logo_url": "https://cdn.trumpf.com/ux.integration-web-styleguide/6.29.0/static/favicon/apple-touch-icon144.png",
+    "description": "德国工业技术企业，提供机床、工业激光、激光加工系统和电力电子设备，应用包括精密加工与 EUV 光刻。",
+    "businesses": [
+      "工业与超短脉冲激光",
+      "激光切割与焊接",
+      "EUV 光刻光源相关技术",
+      "工业电源"
+    ],
+    "listed": null,
+    "listing": "请以官方公司资料为准",
+    "sources": [
+      {
+        "title": "TRUMPF 公司与产品",
+        "url": "https://www.trumpf.com/en_INT/company/profile/"
+      }
+    ]
+  },
+  {
+    "id": "amec",
+    "name": "中微公司",
+    "name_en": "AMEC",
+    "aliases": [
+      "中微半导体",
+      "Advanced Micro-Fabrication Equipment"
+    ],
+    "website": "https://www.amec-inc.com/",
+    "logo_url": "https://www.amec-inc.com/uploads/images/20200922/1600757852552985.png",
+    "description": "中微半导体设备（上海）股份有限公司，提供半导体制造用刻蚀与薄膜沉积等工艺设备。",
+    "businesses": [
+      "等离子体刻蚀设备",
+      "MOCVD 与薄膜沉积设备"
+    ],
+    "listed": null,
+    "listing": "上市状态与证券信息以公司投资者关系资料为准",
+    "sources": [
+      {
+        "title": "中微公司官网及产品",
+        "url": "https://www.amec-inc.com/"
+      }
+    ]
+  }
+]

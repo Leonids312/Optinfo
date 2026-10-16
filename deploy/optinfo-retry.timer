@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry missing or partial Optinfo daily briefings after 04:00
+
+[Timer]
+OnCalendar=*-*-* 05..23:00:00
+Persistent=true
+AccuracySec=1min
+Unit=optinfo-generate.service
+
+[Install]
+WantedBy=timers.target

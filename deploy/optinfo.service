@@ -1,0 +1,24 @@
+[Unit]
+Description=Optinfo private briefing API
+Requires=optinfo-runtime.service
+After=optinfo-runtime.service network-online.target
+
+[Service]
+Type=simple
+User=optinfo
+Group=optinfo
+RootDirectory=/share/xdq/Optinfo/runtime
+WorkingDirectory=/app/backend
+EnvironmentFile=/share/xdq/Optinfo/runtime/config/service.env
+Environment=PYTHONPATH=/app/backend PYTHONUNBUFFERED=1 HOME=/data TZ=Asia/Shanghai
+ExecStart=/harness/venv/bin/python -m uvicorn optinfo.api:app --host 127.0.0.1 --port 18766 --workers 1
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+UMask=0077
+MemoryLimit=4G
+CPUQuota=200%
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target

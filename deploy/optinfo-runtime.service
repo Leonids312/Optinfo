@@ -1,0 +1,12 @@
+[Unit]
+Description=Prepare isolated Optinfo runtime mounts
+After=local-fs.target network-online.target
+Before=optinfo.service optinfo-generate.service optinfo-events.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/share/xdq/Optinfo/ops/mount-runtime.sh
+
+[Install]
+WantedBy=multi-user.target
