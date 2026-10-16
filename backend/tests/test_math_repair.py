@@ -57,6 +57,7 @@ def test_existing_math_and_facts_are_immutable_during_delimiter_insertion():
 @pytest.mark.parametrize("original,repaired", [
     (r"\(x=1\)", r"\(x\)\(=1\)"),
     (r"x=1 https://example.org/a", r"\(x=1\) https://example.org/\(a\)"),
+    (r"x=1 https://example.org/a", r"\(x=1\) https://example.org/a\(\)"),
 ])
 def test_existing_math_boundaries_and_original_urls_cannot_be_split(original, repaired):
     with pytest.raises(ValueError):

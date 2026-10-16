@@ -304,7 +304,8 @@ def validate_delimiter_only_repair(original: str, repaired: str) -> str:
     """Permit delimiter insertions and the explicitly equivalent AA alias only."""
     original = canonicalize_math(original)
     repaired = canonicalize_math(repaired)
-    protected = _math_spans(original) + [(match.start(), match.end()) for match in re.finditer(URL_PATTERN, original)]
+    protected_math = _math_spans(original)
+    protected_urls = [(match.start(), match.end()) for match in re.finditer(URL_PATTERN, original)]
     if len(repaired) > len(original) * 2 + 100:
         raise ValueError("Formatting repair exceeds insertion bound")
     for operation, old_start, _b, start, end in SequenceMatcher(None, original, repaired, autojunk=False).get_opcodes():
@@ -312,7 +313,8 @@ def validate_delimiter_only_repair(original: str, repaired: str) -> str:
             continue
         if operation != "insert" or not re.fullmatch(r"(?:\\[()\[\]])+", repaired[start:end]):
             raise ValueError("Formatting repair changed original text")
-        if any(a < old_start < b for a, b in protected):
+        if (any(a < old_start < b for a, b in protected_math)
+                or any(a < old_start <= b for a, b in protected_urls)):
             raise ValueError("Formatting repair altered an existing math span or URL")
     validate_math_format(repaired)
     return repaired
