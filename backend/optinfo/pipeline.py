@@ -11,6 +11,10 @@ from .catalog import COMPANIES, TOPICS, match_companies
 from .harness import HarnessUnavailable, analyze_candidate, is_configured, safe_error_details
 from .sources import collect, enrich
 
+
+class SourceCollectionUnavailable(RuntimeError):
+    stage = "collect"
+
 def score_candidate(item: dict, topic_ids: list[str]) -> float:
     haystack = " ".join(str(item.get(k, "")) for k in ("title", "evidence_text", "journal")).casefold()
     selected = set(topic_ids)
@@ -69,35 +73,50 @@ def discovered_companies(candidate: dict, analysis: dict) -> list[dict]:
                        "sources": [{"title": candidate["title"], "url": candidate["source_url"]}], "bookmarked": False})
     return result
 
-def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: bool = False, exclude_ids: set[str] | None = None) -> dict:
+def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: bool = False,
+                     exclude_ids: set[str] | None = None, retry_ids: set[str] | None = None) -> dict:
     if not is_configured():
         raise HarnessUnavailable("官方 DeepSeek Harness 尚未就绪，未生成替代内容。")
     candidates, diagnostics = collect(edition_date, sections={"world"}) if major_only else collect(edition_date)
     candidates = [c for c in candidates if c["id"] not in (exclude_ids or set())]
+    retry_scope = set(retry_ids) - (exclude_ids or set()) if retry_ids is not None else None
+    missing = set()
+    if retry_scope is not None:
+        # A partial edition retries its original failures only. Otherwise one bad
+        # item can cause fresh articles and charges on every subsequent retry.
+        candidates = [c for c in candidates if c["id"] in retry_scope]
+        missing = retry_scope - {c["id"] for c in candidates}
+        diagnostics.extend({"item": item_id, "status": "retry_missing", "error": "CandidateUnavailable"}
+                           for item_id in sorted(missing))
     if not any(d["status"] == "ok" for d in diagnostics):
-        raise RuntimeError("All sources failed; existing editions remain unchanged")
+        raise SourceCollectionUnavailable("All sources failed; existing editions remain unchanged")
     limits = {"research": 6, "industry": 4, "world": 3}
     # Hard bound limits cost and article fetching; source failures remain visible.
     max_candidates = max(3, min(30, int(os.getenv("OPTINFO_MAX_CANDIDATES", "18"))))
     ranked = []
     for section in (("world",) if major_only else ("research", "industry", "world")):
         pool = sorted([c for c in candidates if c["section"] == section], key=lambda c: (score_candidate(c, topic_ids), c["published_at"]), reverse=True)
-        ranked.extend(pool[: limits[section] + 2])
+        ranked.extend(pool if retry_scope is not None else pool[: limits[section] + 2])
+    deferred = ranked[max_candidates:] if retry_scope is not None else []
+    diagnostics.extend({"item": item["id"], "status": "retry_deferred"} for item in deferred)
     ranked = ranked[:max_candidates]
     labels = [t["label"] for t in TOPICS if t["id"] in topic_ids]
-    items, failures, companies, reviewed_ids = [], 0, {c["id"]: c for c in COMPANIES}, []
+    items, failures, companies, reviewed_ids = [], len(missing) + len(deferred), {c["id"]: c for c in COMPANIES}, []
     seen_titles = set()
-    for raw in ranked:
-        if sum(i["section"] == raw["section"] for i in items) >= limits[raw["section"]]:
+    for index, raw in enumerate(ranked):
+        if retry_scope is None and sum(i["section"] == raw["section"] for i in items) >= limits[raw["section"]]:
             continue
         title_key = re.sub(r"\W+", "", raw["title"]).casefold()
-        if title_key in seen_titles:
+        if retry_scope is None and title_key in seen_titles:
             continue
         seen_titles.add(title_key)
         candidate = enrich(raw)
         candidate["company_ids"] = list(dict.fromkeys([*candidate.get("company_ids", []), *match_companies(candidate["title"] + " " + candidate.get("evidence_text", ""))]))
         if len(candidate.get("evidence_text", "")) < 100:
-            diagnostics.append({"item": candidate["id"], "status": "insufficient_evidence"})
+            if retry_scope is not None:
+                failures += 1
+            diagnostics.append({"item": candidate["id"], "status": "retry_missing" if retry_scope is not None else "insufficient_evidence",
+                                "error": "InsufficientEvidence"})
             continue
         try:
             analysis = analyze_candidate(candidate, labels, edition_date)
@@ -114,9 +133,10 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
             diagnostics.append({"item": candidate["id"], "status": "model_failed", **safe_error_details(exc)})
             # Avoid billing/retrying an outage for the whole candidate set.
             if failures >= 3 and not items:
-                raise HarnessUnavailable("Harness 连续失败；保留已有简报，等待下一次重试。") from None
-    if not items and failures:
-        raise RuntimeError("No evidence-backed items produced; existing editions remain unchanged")
+                diagnostics.extend({"item": item["id"], "status": "retry_deferred"} for item in ranked[index + 1:])
+                break
+    # Preserve successful filtered decisions even when nothing is published;
+    # a single transient model failure must not rebill them on the next hourly run.
     return {"items": sorted(items, key=lambda i: (i["section"], -i["importance"])), "companies": list(companies.values()),
             "diagnostics": diagnostics, "status": "partial" if failures else "ready", "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
             "topic_ids": topic_ids, "reviewed_ids": reviewed_ids}

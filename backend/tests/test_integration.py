@@ -63,19 +63,23 @@ def test_cli_partial_retry_keeps_successes_without_rebilling(tmp_path, monkeypat
     monkeypatch.setattr(cli, "now_shanghai", lambda: now)
     calls = []
 
-    def generate(day, topics, major_only=False, exclude_ids=None):
-        calls.append(set(exclude_ids or []))
+    def generate(day, topics, major_only=False, exclude_ids=None, retry_ids=None):
+        calls.append((set(exclude_ids or []), retry_ids))
         index = len(calls)
         return {"items": [{"id": f"success-{index}", "title": f"成功条目{index}", "section": "research", "importance": 90 - index}],
-                "companies": [], "generated_at": now.isoformat(), "diagnostics": [], "status": "partial" if index == 1 else "ready"}
+                "companies": [], "generated_at": now.isoformat(),
+                "diagnostics": [{"item": "success-2", "status": "model_failed"}] if index == 1 else [],
+                "status": "partial" if index == 1 else "ready"}
 
     monkeypatch.setattr(pipeline, "generate_edition", generate)
     assert cli.main(["generate", "--date", "2026-10-16"]) == 0
     db = Database(settings.db_path).init()
     db.set_item_bookmark("success-1", True)
     assert not db.edition_exists("2026-10-16")
+    assert db.get_edition("2026-10-15") is None
+    assert db.get_edition("2026-10-16")["metadata"]["diagnostics"] == [{"item": "success-2", "status": "model_failed"}]
     assert cli.main(["generate", "--date", "2026-10-16"]) == 0
-    assert calls == [set(), {"success-1"}]
+    assert calls == [(set(), None), ({"success-1"}, {"success-2"})]
     assert db.edition_exists("2026-10-16")
     assert {item["id"] for item in db.query_items(day="2026-10-16")} == {"success-1", "success-2"}
     assert db.get_item("success-1")["bookmarked"] is True

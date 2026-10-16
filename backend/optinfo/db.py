@@ -92,6 +92,14 @@ class Database:
             row = conn.execute("SELECT status FROM editions WHERE date=?", (_day(day),)).fetchone()
         return bool(row and row["status"] == "ready")
 
+    def get_edition(self, day: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute("SELECT date,generated_at,status,metadata_json FROM editions WHERE date=?", (_day(day),)).fetchone()
+        if row is None:
+            return None
+        return {"date": row["date"], "generated_at": row["generated_at"],
+                "status": row["status"], "metadata": json.loads(row["metadata_json"])}
+
     def save_edition(self, day: str, items: list[dict], generated_at: str | None = None,
                      status: str = "ready", metadata: dict | None = None) -> bool:
         day = _day(day)

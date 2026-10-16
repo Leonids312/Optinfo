@@ -22,6 +22,7 @@ SYSTEM_PROMPT = """你是 Optinfo 的中文科研与产业资讯分析员。只�
 没有任何外部工具可用。不得声称已浏览未提供的页面，不得编造论文图表、数据、薪资或来源。
 区分实测、作者宣称、企业公告与推断。摘要无法支持的细节明确说未获取；未知就说未知。
 适当解释机理及关联，但须标注推断。所有来源仅使用输入中的来源。中文回答。
+界面以纯文本展示：回答使用清晰段落和编号，不使用 Markdown 加粗符号、标题标记或表格。
 """
 PATCH = """# Pinned to deepseek-harness-sdk 0.1.5rc1; intentionally no model tools.
 - id: persistent-bash
@@ -85,7 +86,7 @@ def validate_analysis(value: dict) -> dict:
 def safe_error_details(exc: Exception) -> dict:
     """Allowlisted operational metadata only; never exception text or model output."""
     details = {"error": type(exc).__name__}
-    if getattr(exc, "stage", "") in {"configuration", "initialize", "run", "completion", "parse", "schema", "runtime"}:
+    if getattr(exc, "stage", "") in {"configuration", "initialize", "run", "completion", "parse", "schema", "runtime", "collect"}:
         details["stage"] = exc.stage
     exception_type = getattr(exc, "exception_type", "")
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", exception_type):
@@ -170,13 +171,26 @@ company_mentions 只列文中真实提及的企业（不列学校、期刊、研
     run_home = runtime_root() / "generation" / edition_date / uuid.uuid4().hex
     try:
         budget = max(8000, min(12000, int(os.getenv("OPTINFO_GENERATION_MAX_TOKENS", "8000"))))
+        retry_reason = "structure"
         for attempt in range(2):
             instruction = prompt
             if attempt:
-                instruction = ("上次回答未通过JSON结构校验。请根据下面相同证据重新独立生成；不要猜测或补全截断字段。"
+                reason = "上次回答达到输出长度上限而未完成。" if retry_reason == "max-tokens" else "上次回答未通过JSON结构校验。"
+                compact_prompt = prompt.replace("每个 content 字段控制在200–350字以内", "每个 content 字段不超过150字")
+                instruction = (reason + "请根据下面相同证据重新独立生成；不要猜测或补全截断字段。"
                                "只返回严格合法的完整单行JSON，不使用反斜线、LaTeX、英文引号嵌套、代码块。"
-                               "每段尽量150–250字以确保输出完整。\n") + prompt
-            text = _run(instruction, run_home / f"attempt-{attempt + 1}", max_tokens=budget)
+                               "直接整理证据，不做冗长推演；证据不足可更短，以确保输出完整。\n") + compact_prompt
+            try:
+                text = _run(instruction, run_home / f"attempt-{attempt + 1}", max_tokens=budget)
+            except HarnessUnavailable as exc:
+                exc.attempts = attempt + 1
+                if not attempt and exc.stage == "completion" and exc.finish_reason == "max-tokens":
+                    # One fresh request from the original evidence, never a continuation
+                    # of truncated JSON. The same two-attempt cap covers schema failures.
+                    retry_reason = "max-tokens"
+                    budget = 12000
+                    continue
+                raise
             stage = "parse"
             try:
                 value = parse_json_response(text)
@@ -201,7 +215,12 @@ async def answer_question(item: dict, messages: list[dict], session_dir: Path | 
     return await asyncio.to_thread(_run, prompt, Path(session_dir), None, 4500)
 
 def cleanup_session(session_dir: Path | str) -> None:
-    path = Path(session_dir).resolve()
+    original = Path(session_dir)
+    # Resolve must not turn a caller-supplied UUID symlink into a different valid
+    # UUID session directory that would then pass the deletion checks below.
+    if original.is_symlink():
+        raise ValueError("Refusing to remove a symlink session directory")
+    path = original.resolve()
     # Only one UUID-named directory may be deleted, never a configured root.
     try:
         uuid.UUID(path.name)

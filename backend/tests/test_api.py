@@ -161,6 +161,33 @@ def test_expired_cleanup_retries_after_hook_failure(service):
     assert not (config.chat_dir / first["session_id"]).exists()
 
 
+def test_expired_cleanup_rejects_symlink_to_active_session_in_same_root(service):
+    client, db, clock, adapter, config = service
+    expired = client.post("/api/items/paper-1/chat", json={"message": "first"}).json()
+    clock[0] += timedelta(days=6)
+    db.upsert_items([item("paper-2")], clock[0].date().isoformat())
+    active = client.post("/api/items/paper-2/chat", json={"message": "keep active"}).json()
+    old_path = config.chat_dir / expired["session_id"]
+    active_path = config.chat_dir / active["session_id"]
+    (old_path / "test-resource").unlink()
+    old_path.rmdir()
+    try:
+        old_path.symlink_to(active_path, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Directory symlinks are unavailable for this Windows account")
+    try:
+        clock[0] += timedelta(days=2)
+        assert client.get("/api/items/paper-1/chat").json()["status"] == "empty"
+        assert expired["session_id"] in db.pending_chat_cleanup()
+        assert adapter.deleted == []
+        assert old_path.is_symlink()
+        assert (active_path / "test-resource").read_text(encoding="utf-8") == "session resource"
+        current = client.get("/api/items/paper-2/chat").json()
+        assert current["session_id"] == active["session_id"] and len(current["messages"]) == 2
+    finally:
+        old_path.unlink()
+
+
 def test_malformed_request_has_simple_error(service):
     client, *_ = service
     response = client.post("/api/items/paper-1/chat", json={"message": "", "extra": "ignored?"})

@@ -66,7 +66,10 @@ def create_app(settings: Settings | None = None, *, clock=now_shanghai, harness=
         if str(UUID(session_id)) != session_id:
             raise ValueError("Invalid session id")
         root = settings.chat_dir.resolve()
-        path = (root / session_id).resolve()
+        original = root / session_id
+        if original.is_symlink():
+            raise ValueError("Invalid symlink session directory")
+        path = original.resolve()
         if path.parent != root:
             raise ValueError("Invalid session directory")
         return path

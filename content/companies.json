@@ -7,7 +7,7 @@
       "ASML"
     ],
     "website": "https://www.asml.com/",
-    "logo_url": "https://www.asml.com/favicon.ico",
+    "logo_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6c/ASML_Holding_N.V._logo.svg/330px-ASML_Holding_N.V._logo.svg.png",
     "description": "荷兰半导体设备企业，向芯片制造商提供光刻系统、计算光刻、测量和检测服务。",
     "businesses": [
       "EUV / DUV 光刻系统",
@@ -24,6 +24,10 @@
       {
         "title": "ASML 投资者关系",
         "url": "https://investor.asml.com/"
+      },
+      {
+        "title": "Wikimedia Commons（企业标志来源）",
+        "url": "https://commons.wikimedia.org/wiki/File:ASML_Holding_N.V._logo.svg"
       }
     ]
   },
@@ -93,7 +97,7 @@
       "滨松"
     ],
     "website": "https://www.hamamatsu.com/",
-    "logo_url": "https://www.hamamatsu.com/content/dam/hamamatsu-photonics/system/images/logo.svg",
+    "logo_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/09/Hamamatsu_Photonics_company_logo.svg/330px-Hamamatsu_Photonics_company_logo.svg.png",
     "description": "日本光电技术企业，提供光传感器、相机、光源、激光及光测量系统，服务科研、工业、医疗和半导体制造。",
     "businesses": [
       "光电倍增管与半导体探测器",
@@ -107,6 +111,10 @@
       {
         "title": "滨松光子学公司与产品",
         "url": "https://www.hamamatsu.com/us/en/our-company.html"
+      },
+      {
+        "title": "Wikimedia Commons，原图提取自滨松光子2015年年报（企业标志来源）",
+        "url": "https://commons.wikimedia.org/wiki/File:Hamamatsu_Photonics_company_logo.svg"
       }
     ]
   },
@@ -119,7 +127,7 @@
       "台積電"
     ],
     "website": "https://www.tsmc.com/",
-    "logo_url": "",
+    "logo_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/df/TSMC_wordmark.svg/330px-TSMC_wordmark.svg.png",
     "description": "专业集成电路制造服务企业，提供晶圆代工、制程技术及先进封装服务。",
     "businesses": [
       "晶圆代工",
@@ -136,6 +144,10 @@
       {
         "title": "TSMC 投资者关系",
         "url": "https://investor.tsmc.com/english"
+      },
+      {
+        "title": "Wikimedia Commons，原来源标注为TSMC官网（企业标志来源）",
+        "url": "https://commons.wikimedia.org/wiki/File:TSMC_wordmark.svg"
       }
     ]
   },
@@ -147,7 +159,7 @@
       "Applied Materials"
     ],
     "website": "https://www.appliedmaterials.com/",
-    "logo_url": "",
+    "logo_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/03/Applied_Materials_Logo.svg/330px-Applied_Materials_Logo.svg.png",
     "description": "材料工程设备与服务企业，面向芯片及显示制造，提供沉积、材料改性、去除和工艺控制等技术。",
     "businesses": [
       "半导体制造设备",
@@ -165,6 +177,10 @@
       {
         "title": "Applied Materials 投资者关系",
         "url": "https://ir.appliedmaterials.com/"
+      },
+      {
+        "title": "Wikimedia Commons（企业标志来源）",
+        "url": "https://commons.wikimedia.org/wiki/File:Applied_Materials_Logo.svg"
       }
     ]
   },
@@ -299,7 +315,7 @@
     "name_en": "",
     "aliases": [],
     "website": "",
-    "logo_url": "",
+    "logo_url": "https://p8.itc.cn/q_70/images03/20210928/5a16c247ae834aaabc3c2ace08f781f7.jpeg",
     "description": "公开招聘资料介绍的业务包括：商业遥感卫星、光学设计与制造、计算成像。具体信息参考所附用人单位招聘公告。",
     "businesses": [
       "商业遥感卫星",
@@ -325,6 +341,10 @@
       {
         "title": "华东师范大学就业信息网：长光卫星2025届校园招聘",
         "url": "https://career.ecnu.edu.cn/commonpage/JobInfDetail.aspx?oid=k8HvI+yw3j68IoaolBb%2FCg%3D%3D&sn=2020021252"
+      },
+      {
+        "title": "长光卫星官网（企业标志来源）",
+        "url": "https://www.jl1.cn/"
       }
     ]
   },
@@ -334,7 +354,7 @@
     "name_en": "",
     "aliases": [],
     "website": "",
-    "logo_url": "",
+    "logo_url": "https://static2.xunxiang.site/uploads/sites/1550/2023/06/b1c33b615681e861100dc5c08d00eae1.png",
     "description": "公开招聘资料介绍的业务包括：化合物半导体、分子束外延、GaAs/InP与氮化物外延。具体信息参考所附用人单位招聘公告。",
     "businesses": [
       "化合物半导体",
@@ -360,6 +380,10 @@
       {
         "title": "吉林大学就业网：埃特曼半导体2027校园秋季招聘简章",
         "url": "https://jdjywpt.jlu.edu.cn/portal/recruit/details?id=29a93735e8ca4f92baa397dbcc45b4bf"
+      },
+      {
+        "title": "埃特曼半导体官网（企业标志来源）",
+        "url": "https://www.atoman.com/"
       }
     ]
   },
@@ -369,7 +393,7 @@
     "name_en": "",
     "aliases": [],
     "website": "",
-    "logo_url": "",
+    "logo_url": "https://job.xidian.edu.cn/attachment/xidian/avatar/2025/0207/67a58106858e36.21522665.jpg",
     "description": "公开招聘资料介绍的业务包括：半导体晶圆缺陷检测镜头、精密光学、光学检测与装调装备。具体信息参考所附用人单位招聘公告。",
     "businesses": [
       "半导体晶圆缺陷检测镜头",
@@ -395,6 +419,10 @@
       {
         "title": "河北工业大学就业信息网：启望精密2026届春季校园招聘简章",
         "url": "https://career.hebut.edu.cn/home/correcruit/content/id/76580.html"
+      },
+      {
+        "title": "西安电子科技大学就业信息网：北京启望精密光学科技有限公司企业主页（企业标志来源）",
+        "url": "https://job.xidian.edu.cn/company/view/id/825550"
       }
     ]
   }

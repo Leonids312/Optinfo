@@ -1,5 +1,6 @@
 from datetime import date
 import json
+import uuid
 
 from optinfo import pipeline, sources, harness
 from optinfo.harness import parse_json_response
@@ -70,6 +71,31 @@ def test_model_failure_produces_retryable_partial(monkeypatch):
     assert len(result["items"]) == 1
 
 
+def test_no_published_items_still_retains_filtered_review_after_model_failure(monkeypatch):
+    filtered, failed = sample("world"), sample("world")
+    failed["id"], failed["title"] = "failed", "One unavailable model result"
+    monkeypatch.setattr(pipeline, "is_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([filtered, failed], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "enrich", lambda value: value)
+    def run(item, *args):
+        if item["id"] == "failed":
+            raise harness.HarnessUnavailable("private payload", stage="completion", finish_reason="max-tokens")
+        return analysis(publish=False)
+    monkeypatch.setattr(pipeline, "analyze_candidate", run)
+    result = pipeline.generate_edition("2026-10-16", [], major_only=True)
+    assert result["status"] == "partial" and result["items"] == []
+    assert result["reviewed_ids"] == [filtered["id"]]
+    assert "private payload" not in json.dumps(result["diagnostics"])
+
+
+def test_all_source_failure_has_distinct_safe_error(monkeypatch):
+    monkeypatch.setattr(pipeline, "is_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "collect", lambda day: ([], [{"source": "test", "status": "failed", "error": "TimeoutError"}]))
+    with pytest.raises(pipeline.SourceCollectionUnavailable) as raised:
+        pipeline.generate_edition("2026-10-16", [])
+    assert harness.safe_error_details(raised.value) == {"error": "SourceCollectionUnavailable", "stage": "collect"}
+
+
 def test_known_items_do_not_trigger_model_calls(monkeypatch):
     item = sample()
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
@@ -79,6 +105,44 @@ def test_known_items_do_not_trigger_model_calls(monkeypatch):
     monkeypatch.setattr(pipeline, "enrich", fail)
     result = pipeline.generate_edition("2026-10-16", [], exclude_ids={item["id"]})
     assert result["status"] == "ready" and result["items"] == []
+
+
+def test_partial_retry_only_analyzes_original_failed_candidates(monkeypatch):
+    original, fresh = sample(), sample()
+    fresh["id"], fresh["title"] = "fresh", "New unrelated candidate"
+    monkeypatch.setattr(pipeline, "is_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "collect", lambda day: ([original, fresh], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "enrich", lambda value: value)
+    calls = []
+    def run(item, *args):
+        calls.append(item["id"])
+        return analysis()
+    monkeypatch.setattr(pipeline, "analyze_candidate", run)
+    result = pipeline.generate_edition("2026-10-16", [], retry_ids={original["id"]})
+    assert calls == [original["id"]]
+    assert result["status"] == "ready" and len(result["items"]) == 1
+
+
+def test_missing_partial_retry_stays_partial_without_fresh_billing(monkeypatch):
+    monkeypatch.setattr(pipeline, "is_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "collect", lambda day: ([sample()], [{"source": "test", "status": "ok"}]))
+    def fail(*args):
+        raise AssertionError("Fresh candidates must not be billed on partial retry")
+    monkeypatch.setattr(pipeline, "analyze_candidate", fail)
+    result = pipeline.generate_edition("2026-10-16", [], retry_ids={"missing-previous-failure"})
+    assert result["status"] == "partial" and result["items"] == []
+    assert {"item": "missing-previous-failure", "status": "retry_missing", "error": "CandidateUnavailable"} in result["diagnostics"]
+
+
+def test_partial_retry_all_filtered_finishes_without_filler(monkeypatch):
+    original = sample()
+    monkeypatch.setattr(pipeline, "is_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "collect", lambda day: ([original], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "enrich", lambda value: value)
+    monkeypatch.setattr(pipeline, "analyze_candidate", lambda *args: analysis(publish=False))
+    result = pipeline.generate_edition("2026-10-16", [], retry_ids={original["id"]})
+    assert result["status"] == "ready" and result["items"] == []
+    assert result["reviewed_ids"] == [original["id"]]
 
 
 def test_ssrf_local_and_credential_urls_rejected():
@@ -153,3 +217,60 @@ def test_diagnostics_never_contains_exception_payload():
     value = harness.safe_error_details(error)
     assert "secret" not in json.dumps(value)
     assert value["stage"] == "run" and value["finish_reason"] == "error"
+
+
+def test_max_tokens_retries_once_with_larger_bounded_budget(monkeypatch, tmp_path):
+    calls = []
+    def run(prompt, home, **kwargs):
+        calls.append((prompt, kwargs["max_tokens"]))
+        if len(calls) == 1:
+            raise harness.HarnessUnavailable("private partial response", stage="completion", finish_reason="max-tokens")
+        return json.dumps(complete_analysis(), ensure_ascii=False)
+    monkeypatch.setattr(harness, "_run", run)
+    monkeypatch.setattr(harness, "runtime_root", lambda: tmp_path)
+    assert harness.analyze_candidate(sample(), [], "2026-10-16")["publish"]
+    assert [call[1] for call in calls] == [8000, 12000]
+    assert "A real abstract" in calls[1][0] and "private partial response" not in calls[1][0]
+
+
+@pytest.mark.parametrize("first_failure", ["max-tokens", "json"])
+def test_token_and_json_recovery_share_two_attempt_limit(monkeypatch, tmp_path, first_failure):
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(kwargs["max_tokens"])
+        if len(calls) == 1 and first_failure == "json":
+            return '{"title":"unfinished'
+        raise harness.HarnessUnavailable("truncated", stage="completion", finish_reason="max-tokens")
+    monkeypatch.setattr(harness, "_run", run)
+    monkeypatch.setattr(harness, "runtime_root", lambda: tmp_path)
+    with pytest.raises(harness.HarnessUnavailable) as raised:
+        harness.analyze_candidate(sample(), [], "2026-10-16")
+    assert len(calls) == 2 and max(calls) <= 12000
+    assert harness.safe_error_details(raised.value)["attempts"] == 2
+
+
+def test_non_token_runtime_failure_is_not_automatically_retried(monkeypatch, tmp_path):
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(1)
+        raise harness.HarnessUnavailable("request timeout", stage="run", exception_type="TimeoutError")
+    monkeypatch.setattr(harness, "_run", run)
+    monkeypatch.setattr(harness, "runtime_root", lambda: tmp_path)
+    with pytest.raises(harness.HarnessUnavailable):
+        harness.analyze_candidate(sample(), [], "2026-10-16")
+    assert len(calls) == 1
+
+
+def test_cleanup_rejects_uuid_symlink_without_deleting_target(tmp_path):
+    target = tmp_path / str(uuid.uuid4())
+    target.mkdir()
+    marker = target / "session.txt"
+    marker.write_text("keep", encoding="utf-8")
+    link = tmp_path / str(uuid.uuid4())
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("Host does not permit test symlink creation")
+    with pytest.raises(ValueError, match="symlink"):
+        harness.cleanup_session(link)
+    assert marker.read_text(encoding="utf-8") == "keep" and link.is_symlink()
