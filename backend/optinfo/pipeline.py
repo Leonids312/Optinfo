@@ -59,7 +59,8 @@ def discovered_companies(candidate: dict, analysis: dict) -> list[dict]:
             continue
         name = str(entity.get("name", "")).strip()[:100]
         quote = " ".join(str(entity.get("evidence_quote", "")).split())[:500]
-        if len(name) < 2 or len(quote) < 12 or name not in quote or quote not in evidence or match_companies(name):
+        known = any(name.casefold() in [str(alias).casefold() for alias in (c["name"], c["name_en"], *c.get("aliases", []))] for c in COMPANIES)
+        if len(name) < 2 or len(quote) < 12 or name not in quote or quote not in evidence or known:
             continue
         result.append({"id": "company-" + hashlib.sha256(name.casefold().encode()).hexdigest()[:16],
                        "name": name, "name_en": name if name.isascii() else "", "logo_url": "", "website": "",
@@ -71,7 +72,7 @@ def discovered_companies(candidate: dict, analysis: dict) -> list[dict]:
 def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: bool = False, exclude_ids: set[str] | None = None) -> dict:
     if not is_configured():
         raise HarnessUnavailable("官方 DeepSeek Harness 尚未就绪，未生成替代内容。")
-    candidates, diagnostics = collect(edition_date)
+    candidates, diagnostics = collect(edition_date, sections={"world"}) if major_only else collect(edition_date)
     candidates = [c for c in candidates if c["id"] not in (exclude_ids or set())]
     if not any(d["status"] == "ok" for d in diagnostics):
         raise RuntimeError("All sources failed; existing editions remain unchanged")
@@ -84,7 +85,7 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
         ranked.extend(pool[: limits[section] + 2])
     ranked = ranked[:max_candidates]
     labels = [t["label"] for t in TOPICS if t["id"] in topic_ids]
-    items, failures, companies = [], 0, {c["id"]: c for c in COMPANIES}
+    items, failures, companies, reviewed_ids = [], 0, {c["id"]: c for c in COMPANIES}, []
     seen_titles = set()
     for raw in ranked:
         if sum(i["section"] == raw["section"] for i in items) >= limits[raw["section"]]:
@@ -94,11 +95,13 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
             continue
         seen_titles.add(title_key)
         candidate = enrich(raw)
+        candidate["company_ids"] = list(dict.fromkeys([*candidate.get("company_ids", []), *match_companies(candidate["title"] + " " + candidate.get("evidence_text", ""))]))
         if len(candidate.get("evidence_text", "")) < 100:
             diagnostics.append({"item": candidate["id"], "status": "insufficient_evidence"})
             continue
         try:
             analysis = analyze_candidate(candidate, labels, edition_date)
+            reviewed_ids.append(candidate["id"])
             item = sanitize_analysis(candidate, analysis, edition_date)
             if item:
                 for company in discovered_companies(candidate, analysis):
@@ -116,4 +119,4 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
         raise RuntimeError("No evidence-backed items produced; existing editions remain unchanged")
     return {"items": sorted(items, key=lambda i: (i["section"], -i["importance"])), "companies": list(companies.values()),
             "diagnostics": diagnostics, "status": "partial" if failures else "ready", "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
-            "topic_ids": topic_ids}
+            "topic_ids": topic_ids, "reviewed_ids": reviewed_ids}

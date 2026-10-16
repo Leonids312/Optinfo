@@ -71,6 +71,9 @@ class Database:
                     company_id TEXT PRIMARY KEY REFERENCES companies(id), created_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS preferences (
                     effective_date TEXT PRIMARY KEY, topic_ids_json TEXT NOT NULL, saved_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS candidate_reviews (
+                    date TEXT NOT NULL, item_id TEXT NOT NULL, reviewed_at TEXT NOT NULL,
+                    PRIMARY KEY(date,item_id));
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id TEXT PRIMARY KEY, item_id TEXT UNIQUE NOT NULL REFERENCES items(id),
                     created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
@@ -155,6 +158,16 @@ class Database:
     def latest_date(self) -> str | None:
         dates = self.available_dates()
         return dates[0] if dates else None
+
+    def reviewed_ids(self, day: str) -> set[str]:
+        with self.connection() as conn:
+            return {row[0] for row in conn.execute("SELECT item_id FROM candidate_reviews WHERE date=?", (_day(day),))}
+
+    def mark_reviewed(self, day: str, item_ids):
+        day = _day(day)
+        at = now_shanghai().isoformat()
+        with self.connection() as conn:
+            conn.executemany("INSERT OR IGNORE INTO candidate_reviews VALUES(?,?,?)", [(day, str(item_id), at) for item_id in set(item_ids)])
 
     def preference_state(self, today: str, default_ids: list[str] | None = None) -> dict:
         _day(today)

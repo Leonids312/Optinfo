@@ -205,12 +205,14 @@ def collect_html_list(spec: dict, edition: date) -> list[dict]:
             result.append(item)
     return result
 
-def collect(edition_date: str) -> tuple[list[dict], list[dict]]:
+def collect(edition_date: str, sections: set[str] | None = None) -> tuple[list[dict], list[dict]]:
     edition = date.fromisoformat(edition_date)
-    jobs = [(spec["id"], collect_feed, (spec, edition)) for spec in FEEDS]
-    jobs.extend((spec["id"], collect_html_list, (spec, edition)) for spec in HTML_SOURCES)
-    jobs.append(("arxiv", collect_arxiv, (edition,)))
-    jobs.extend(("crossref-" + j["id"], collect_crossref, (j, edition)) for j in JOURNALS if j.get("issn"))
+    sections = sections or {"research", "industry", "world"}
+    jobs = [(spec["id"], collect_feed, (spec, edition)) for spec in FEEDS if spec["section"] in sections]
+    jobs.extend((spec["id"], collect_html_list, (spec, edition)) for spec in HTML_SOURCES if spec["section"] in sections)
+    if "research" in sections:
+        jobs.append(("arxiv", collect_arxiv, (edition,)))
+        jobs.extend(("crossref-" + j["id"], collect_crossref, (j, edition)) for j in JOURNALS if j.get("issn"))
     diagnostics, found = [], []
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(fn, *args): name for name, fn, args in jobs}

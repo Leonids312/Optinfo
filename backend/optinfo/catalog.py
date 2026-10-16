@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 CONTENT_DIR = Path(__file__).resolve().parents[2] / "content"
 SECTIONS = [
@@ -60,4 +61,19 @@ for company in COMPANIES:
 
 def match_companies(text: str) -> list[str]:
     lowered = text.casefold()
-    return [c["id"] for c in COMPANIES if any(alias.casefold() in lowered for alias in [c["name"], c["name_en"], *c.get("aliases", [])] if len(alias) >= 3)]
+    matched = []
+    for company in COMPANIES:
+        for alias in [company["name"], company["name_en"], *company.get("aliases", [])]:
+            if len(alias) < 2:
+                continue
+            if alias.casefold() == "coherent":
+                # Coherent is also an ordinary optics term; require corporate context.
+                present = bool(re.search(r"\bcoherent\s+(?:corp(?:oration)?|inc|announced|reported)\b", lowered))
+            elif alias.isascii():
+                present = bool(re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", lowered))
+            else:
+                present = alias.casefold() in lowered
+            if present:
+                matched.append(company["id"])
+                break
+    return matched

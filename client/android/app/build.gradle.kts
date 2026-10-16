@@ -50,8 +50,29 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName(if (releasePropertiesFile.exists()) "release" else "debug")
+            signingConfig = if (releasePropertiesFile.exists()) signingConfigs.getByName("release") else null
         }
+    }
+}
+
+val verifyReleaseSigning by tasks.registering {
+    doLast {
+        if (!releasePropertiesFile.exists()) {
+            throw GradleException("Optinfo release builds require android/key.properties and a private release keystore. Use a debug build for local development.")
+        }
+        for (property in listOf("keyAlias", "keyPassword", "storeFile", "storePassword")) {
+            if (releaseProperties.getProperty(property).isNullOrBlank()) {
+                throw GradleException("Optinfo release signing is incomplete: missing $property in android/key.properties.")
+            }
+        }
+        if (!file(releaseProperties.getProperty("storeFile")).exists()) {
+            throw GradleException("Optinfo release signing keystore does not exist.")
+        }
+    }
+}
+tasks.configureEach {
+    if (name == "preReleaseBuild") {
+        dependsOn(verifyReleaseSigning)
     }
 }
 

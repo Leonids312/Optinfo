@@ -3,6 +3,7 @@ import json
 
 from optinfo import pipeline, sources
 from optinfo.harness import parse_json_response
+from optinfo.catalog import match_companies
 
 
 def sample(section="research"):
@@ -95,3 +96,9 @@ def test_ndrc_parser_uses_displayed_date_not_url_date(monkeypatch):
 def test_harness_json_fences_and_preamble():
     assert parse_json_response('```json\n{"publish":true}\n```') == {"publish": True}
     assert parse_json_response('Result: {"publish": false}') == {"publish": False}
+
+
+def test_optics_coherent_word_is_not_company():
+    assert "coherent" not in match_companies("Coherent and incoherent scattering in intelligent materials")
+    assert "intel" not in match_companies("intelligent materials")
+    assert "coherent" in match_companies("Coherent Corp announced a laser")

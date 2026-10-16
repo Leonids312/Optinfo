@@ -3,6 +3,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:optinfo/api.dart';
 import 'package:optinfo/models.dart';
 import 'package:optinfo/screens.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class LifecycleApi extends Api {
+  final List<Map<String, String>> queries = [];
+  LifecycleApi()
+      : super(ConnectionStore()
+          ..base = 'https://example.invalid'
+          ..token = 'test-only');
+  @override
+  Future<Json> call(String path,
+      {String method = 'GET', Json? body, Map<String, String>? query}) async {
+    if (path == '/api/bootstrap') {
+      return {'sections': [], 'topics': [], 'journals': []};
+    }
+    if (path == '/api/briefing') {
+      queries.add(Map<String, String>.from(query!));
+      return {'date': query['date'], 'items': [], 'status': 'ready'};
+    }
+    throw StateError('Unexpected test API path: $path');
+  }
+}
 
 class TestApi extends Api {
   TestApi()
@@ -26,6 +47,45 @@ class TestApi extends Api {
 }
 
 void main() {
+  testWidgets(
+      'resume keeps a historical date but today requests the current Shanghai day',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final api = LifecycleApi();
+    final today = shanghaiToday();
+    final past = DateTime.parse(today).subtract(const Duration(days: 1));
+    final pastText = past.toIso8601String().substring(0, 10);
+    await tester.pumpWidget(MaterialApp(home: HomeScreen(api: api)));
+    await tester.pumpAndSettle();
+    expect(api.queries.last['date'], today);
+    await tester.tap(find.text('历史'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(today));
+    await tester.pumpAndSettle();
+    tester
+        .widget<CalendarDatePicker>(find.byType(CalendarDatePicker))
+        .onDateChanged(past);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(api.queries.last['date'], pastText);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(api.queries.last['date'], pastText);
+    await tester.tap(find.text('今日'));
+    await tester.pumpAndSettle();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(api.queries.last['date'], shanghaiToday());
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'an intentionally empty pending selection does not restore today interests',
       (tester) async {

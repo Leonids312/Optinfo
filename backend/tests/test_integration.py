@@ -79,3 +79,22 @@ def test_cli_partial_retry_keeps_successes_without_rebilling(tmp_path, monkeypat
     assert db.edition_exists("2026-10-16")
     assert {item["id"] for item in db.query_items(day="2026-10-16")} == {"success-1", "success-2"}
     assert db.get_item("success-1")["bookmarked"] is True
+
+
+def test_hourly_events_do_not_rebill_filtered_candidates_but_reset_next_day(tmp_path, monkeypatch):
+    settings = Settings(tmp_path / "data.db", tmp_path / "chats", "test")
+    now = datetime(2026, 10, 16, 4, tzinfo=SHANGHAI)
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(cli, "now_shanghai", lambda: now)
+    calls = []
+
+    def generate(day, topics, major_only=False, exclude_ids=None):
+        calls.append((day, set(exclude_ids or [])))
+        return {"items": [], "companies": [], "generated_at": now.isoformat(), "diagnostics": [],
+                "status": "ready", "reviewed_ids": ["low-importance"]}
+
+    monkeypatch.setattr(pipeline, "generate_edition", generate)
+    assert cli.main(["major-events", "--date", "2026-10-16"]) == 0
+    assert cli.main(["major-events", "--date", "2026-10-16"]) == 0
+    assert cli.main(["major-events", "--date", "2026-10-17"]) == 0
+    assert calls == [("2026-10-16", set()), ("2026-10-16", {"low-importance"}), ("2026-10-17", set())]

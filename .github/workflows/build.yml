@@ -40,7 +40,9 @@ jobs:
           path: .flutter
       - name: Add Flutter to PATH
         shell: pwsh
-        run: Add-Content -LiteralPath $env:GITHUB_PATH -Value "$env:GITHUB_WORKSPACE/.flutter/bin"
+        run: |
+          git -C "$env:GITHUB_WORKSPACE/.flutter" fetch origin tag 3.47.7 --depth 1
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value "$env:GITHUB_WORKSPACE/.flutter/bin"
       - uses: actions/cache@v4
         with:
           path: .flutter/bin/cache
