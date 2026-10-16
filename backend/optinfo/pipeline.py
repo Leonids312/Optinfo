@@ -25,7 +25,7 @@ def require_paper_evidence(candidate: dict):
         return
     if candidate.get("evidence_level") not in {"fulltext", "fulltext_pdf"}:
         raise EvidencePending("pending_fulltext")
-    if not candidate.get("figure_candidates"):
+    if not candidate.get("figure_candidates") or candidate.get("figure_coverage") == "missing_main_figures":
         raise EvidencePending("pending_figures")
 
 def selected_figures(candidate: dict, analysis: dict) -> list[dict]:

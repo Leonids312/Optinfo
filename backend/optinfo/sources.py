@@ -24,7 +24,7 @@ import feedparser
 import httpx
 
 from .catalog import JOURNALS, match_companies
-from .paper_evidence import figure_candidates, pdf_evidence, preserve_math, text_with_math
+from .paper_evidence import figure_candidates, figure_key, merge_figure_candidates, pdf_evidence, preserve_math, text_with_math, vector_figure_keys
 from .media import MAX_IMAGE_BYTES, render_pdf_page, store_image
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -249,7 +249,8 @@ def enrich(item: dict) -> dict:
     arXiv HTML provides actual figures with captions. Publisher pages are accepted
     as fulltext only when a real article body is present (never a subscription preview).
     """
-    result = dict(item, figure_candidates=[], figures=[])
+    result = dict(item, figure_candidates=[], figures=[], figure_coverage="complete")
+    vector_keys = set()
     # Repair must prove access anew. An old full-text label is not evidence of
     # a successful retrieval today and must not suppress fresh PDF extraction.
     if result.get("evidence_level") in {"fulltext", "fulltext_pdf"}:
@@ -306,6 +307,9 @@ def enrich(item: dict) -> dict:
             result["access_status"] = "accessible"
             result["evidence_url"] = final_url
             result["figure_candidates"] = figure_candidates(article, final_url)
+            vector_keys = vector_figure_keys(article)
+            if any(key.startswith("main:") or key == "unlabelled" for key in vector_keys):
+                result["figure_coverage"] = "missing_main_figures"
             result["math_extraction"] = "latex_preserved" if math_count else "no_embedded_math"
         else:
             # Abstract extraction is useful for Crossref metadata-only candidates.
@@ -316,7 +320,7 @@ def enrich(item: dict) -> dict:
             result["access_status"] = "abstract_only" if item["section"] == "research" else "feed_only"
     except Exception as exc:
         result["access_status"] = "unavailable_" + type(exc).__name__
-    if item["section"] == "research" and (result.get("evidence_level") != "fulltext" or not result["figure_candidates"]):
+    if item["section"] == "research" and (result.get("evidence_level") != "fulltext" or not result["figure_candidates"] or vector_keys):
         for pdf_url in list(dict.fromkeys(pdf_urls))[:2]:
             try:
                 data, pdf_final, _ = fetch_bytes(pdf_url, max_bytes=25_000_000, timeout=30)
@@ -324,8 +328,13 @@ def enrich(item: dict) -> dict:
                 if len(evidence["evidence_text"]) < 1200:
                     raise ValueError("PDF has insufficient extractable text")
                 if result.get("evidence_level") == "fulltext":
-                    result.update({key: evidence[key] for key in ("figure_candidates", "_pdf_bytes")})
+                    result["figure_candidates"] = merge_figure_candidates(result["figure_candidates"], evidence["figure_candidates"], vector_keys)
+                    result["_pdf_bytes"] = evidence["_pdf_bytes"]
                     result["pdf_source_url"] = pdf_final
+                    pdf_keys = {figure_key(figure.get("label", "") or figure["original_caption"])
+                                for figure in result["figure_candidates"] if figure.get("kind") == "pdf_page"}
+                    required = {key for key in vector_keys if key.startswith("main:") or key == "unlabelled"}
+                    result["figure_coverage"] = "complete" if required <= pdf_keys else "missing_main_figures"
                 else:
                     result.update(evidence)
                 if result["figure_candidates"]:

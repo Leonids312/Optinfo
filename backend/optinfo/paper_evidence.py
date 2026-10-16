@@ -11,6 +11,57 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 MAX_FIGURES = 32
 
 
+def figure_key(caption: str) -> str:
+    """Canonical source figure label; supplements never collide with main figures."""
+    match = re.match(r"\s*(?:(supplementary|extended\s+data)\s+)?(?:fig(?:ure)?\.?|图)\s*(s?\d+[a-z]?)(?=[\s.:：,(]|$)", caption, re.I)
+    if not match:
+        return ""
+    prefix = re.sub(r"\s+", "", (match[1] or "main").lower())
+    number = match[2].lower()
+    if number.startswith("s"):
+        prefix, number = "supplementary", number[1:]
+    return prefix + ":" + number
+
+
+def vector_figure_keys(article: Tag) -> set[str]:
+    missing = set()
+    for figure in article.select("figure, .c-article-section__figure, .fig, .figure"):
+        vector = figure.select_one('svg, object[type="image/svg+xml"], embed[type="image/svg+xml"]')
+        if vector is None:
+            vector = next((node for node in figure.select("img, object, embed")
+                           if any(re.search(r"\.svg(?:[?#]|$)", str(node.get(attr, "")), re.I)
+                                  for attr in ("src", "data", "data-src"))), None)
+        if vector is not None:
+            caption = figure.select_one("figcaption, .ltx_caption, .c-article-section__figure-caption, .fig-caption, .caption")
+            label = figure.select_one(".fig-label")
+            text = (label.get_text(" ", strip=True) + " " if label else "") + (caption.get_text(" ", strip=True) if caption else "")
+            missing.add(figure_key(text) or "unlabelled")
+    return missing
+
+
+def merge_figure_candidates(html_figures: list[dict], pdf_figures: list[dict], vector_keys: set[str]) -> list[dict]:
+    """Keep original raster figures, adding/replacing missing vector source pages."""
+    available_pdf = {figure_key(figure.get("label", "") or figure["original_caption"]) for figure in pdf_figures}
+    replace = (vector_keys & available_pdf) - {""}
+    result = [figure for figure in html_figures if figure_key(figure.get("label", "") or figure["original_caption"]) not in replace]
+    seen = {figure_key(figure.get("label", "") or figure["original_caption"]) for figure in result} - {""}
+    for figure in pdf_figures:
+        key = figure_key(figure.get("label", "") or figure["original_caption"])
+        if key and key in seen:
+            continue
+        result.append(figure)
+        if key:
+            seen.add(key)
+    def source_order(figure):
+        key = figure_key(figure.get("label", "") or figure["original_caption"])
+        prefix, _, number = key.partition(":")
+        numeric = re.match(r"\d+", number)
+        return (0 if prefix == "main" else 1 if prefix == "supplementary" else 2,
+                int(numeric[0]) if numeric else 100000, number)
+    result.sort(key=source_order)
+    return result[:MAX_FIGURES]
+
+
 def _tex(node) -> str:
     if isinstance(node, NavigableString):
         return str(node).strip()
@@ -148,10 +199,11 @@ def pdf_evidence(data: bytes, source_url: str) -> dict:
         text.append(page_text)
         # Only caption-like paragraph starts; an in-body 'see Fig. 2' is not
         # sufficient evidence that a figure is located on this page.
-        caption_start = r"(?:(?:fig(?:ure)?\.?\s*\d+[a-z]?|图\s*\d+)\s*[:.：]\s*|(?-i:FIG\.?\s*\d+[A-Za-z]?)\s+(?=[A-Z]))"
+        label_pattern = r"(?:(?:supplementary|extended\s+data)\s+)?(?:fig(?:ure)?\.?\s*S?\d+[a-z]?|图\s*S?\d+)"
+        caption_start = r"(?:" + label_pattern + r"\s*[:.：]\s*|(?-i:(?:(?:Supplementary|Extended Data)\s+)?(?:FIG(?:URE)?|Figure)\.?\s*S?\d+[A-Za-z]?)\s+(?=[A-Z]))"
         for match in re.finditer(r"(?im)^\s*(" + caption_start + r"[^\n]+(?:\n(?!\s*\n)[^\n]+){0,8})", page_text):
             caption = " ".join(match[1].split())[:2200]
-            label = re.match(r"(?i)(?:fig(?:ure)?\.?\s*\d+[a-z]?|图\s*\d+)", caption)[0]
+            label = re.match(label_pattern, caption, re.I)[0]
             figure_id = "pdf-" + hashlib.sha256((source_url + f"#{number}:" + label).encode()).hexdigest()[:16]
             figures.append({"id": figure_id, "url": source_url + f"#page={number}", "source_url": source_url,
                 "original_caption": caption, "context": page_text[:3200], "kind": "pdf_page", "page": number,

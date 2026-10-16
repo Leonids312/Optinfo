@@ -16,7 +16,7 @@ from optinfo.api import create_app
 from optinfo.config import Settings, SHANGHAI
 from optinfo.db import Database
 from optinfo.media import media_path, render_pdf_page, store_image
-from optinfo.paper_evidence import figure_candidates, pdf_evidence, text_with_math
+from optinfo.paper_evidence import figure_candidates, figure_key, merge_figure_candidates, pdf_evidence, text_with_math
 
 
 def make_pdf(caption="FIG. 1. Experimental measured result.", pages=1):
@@ -114,6 +114,52 @@ def test_pdf_original_page_provenance_and_render(caption):
     with Image.open(BytesIO(render_pdf_page(data, figure["page"]))) as image:
         assert image.format == "PNG" and max(image.size) <= 2200
     assert pdf_evidence(make_pdf("See FIG. 2 for details."), "https://example.org/p.pdf")["figure_candidates"] == []
+
+
+@pytest.mark.parametrize("caption", ["FIG. S1. Supplementary measured result.", "Figure S1 Measured result.", "Supplementary Figure 1. Extra measured result."])
+def test_pdf_supplementary_labels_do_not_collide_with_main_figures(caption):
+    figure = pdf_evidence(make_pdf(caption), "https://example.org/paper.pdf")["figure_candidates"][0]
+    assert figure_key(figure["label"]) == "supplementary:1"
+    assert figure_key("Figure 1: Main result") == "main:1"
+
+
+def mixed_figure_html():
+    return '<article class="ltx_document"><p>' + 'Original HTML mathematics and results. ' * 80 + r'<math alttext="E_g=2"><mi>E</mi></math></p>' + ''.join(
+        f'<figure id="f{i}"><figcaption>Figure {i}: Original experimental result.</figcaption>' + (f'<img src="f{i}.png">' if i in (1, 5) else f'<object type="image/svg+xml" data="f{i}.svg"></object>') + '</figure>' for i in range(1, 6)) + '</article>'
+
+
+def test_mixed_raster_svg_merges_pdf_without_replacing_html_math(monkeypatch):
+    raw = dict(paper(), source_url="https://arxiv.org/abs/2601.12345")
+    monkeypatch.setattr(sources, "fetch", lambda url, **kwargs: (mixed_figure_html(), url))
+    monkeypatch.setattr(sources, "fetch_bytes", lambda *args, **kwargs: (b"%PDF-fixture", "https://arxiv.org/pdf/2601.12345", "application/pdf"))
+    pdf_figures = [{"id": f"pdf-{i}", "label": f"FIG. {i}", "page": i, "original_caption": f"FIG. {i}. Original result.", "kind": "pdf_page", "url": f"https://arxiv.org/pdf/2601.12345#page={i}"} for i in range(1, 6)]
+    monkeypatch.setattr(sources, "pdf_evidence", lambda *args: {"evidence_text": "PDF TEXT " * 200, "figure_candidates": pdf_figures, "_pdf_bytes": b"%PDF-fixture"})
+    value = sources.enrich(raw)
+    assert len(value["figure_candidates"]) == 5
+    assert {figure["kind"] for figure in value["figure_candidates"]} == {"original_image", "pdf_page"}
+    assert {figure_key(figure.get("label", "") or figure["original_caption"]) for figure in value["figure_candidates"]} == {f"main:{i}" for i in range(1, 6)}
+    assert {figure["label"] for figure in value["figure_candidates"] if figure["kind"] == "pdf_page"} == {"FIG. 2", "FIG. 3", "FIG. 4"}
+    assert r"\(E_g=2\)" in value["evidence_text"] and "Original HTML" in value["evidence_text"]
+    assert value["math_extraction"] == "latex_preserved" and value["figure_coverage"] == "complete"
+
+
+def test_mixed_main_svg_pdf_failure_stays_pending(monkeypatch):
+    monkeypatch.setattr(sources, "fetch", lambda url, **kwargs: (mixed_figure_html(), url))
+    def fail(*args, **kwargs):
+        raise RuntimeError("PDF unavailable")
+    monkeypatch.setattr(sources, "fetch_bytes", fail)
+    value = sources.enrich(dict(paper(), source_url="https://arxiv.org/abs/2601.12345"))
+    assert len(value["figure_candidates"]) == 2 and value["figure_coverage"] == "missing_main_figures"
+    with pytest.raises(pipeline.EvidencePending):
+        pipeline.require_paper_evidence(value)
+
+
+def test_mixed_subpanels_prefer_complete_pdf_page_and_limit_candidates():
+    raster = [{"id": "raster", "original_caption": "Figure 1: Mixed raster and SVG subpanels.", "kind": "original_image"}]
+    pages = [{"id": f"pdf-{i}", "label": f"FIG. {i}", "original_caption": f"FIG. {i}. Result.", "kind": "pdf_page"} for i in range(1, 40)]
+    merged = merge_figure_candidates(raster, pages, {"main:1"})
+    assert len(merged) == 32 and merged[0]["id"] == "pdf-1"
+    assert all(figure["id"] != "raster" for figure in merged)
 
 
 def test_pdf_rejects_nonpdf_and_page_limit():
