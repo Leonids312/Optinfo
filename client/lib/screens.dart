@@ -7,6 +7,7 @@ import 'api.dart';
 import 'cache.dart';
 import 'main.dart' show ink, teal;
 import 'models.dart';
+import 'updates.dart';
 
 const sectionNames = {'research': '研究进展', 'industry': '产业动态', 'world': '重大事件'};
 const kindNames = {
@@ -46,7 +47,9 @@ Future<void> openLink(BuildContext context, String value) async {
 class HomeScreen extends StatefulWidget {
   final Api api;
   final String? initialError;
-  const HomeScreen({super.key, required this.api, this.initialError});
+  final UpdateService? updates;
+  const HomeScreen(
+      {super.key, required this.api, this.initialError, this.updates});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -66,6 +69,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _bootstrapRequest = 0;
   final Map<int, (String, String, String, String, bool)> _tabs = {};
   Timer? _dayTimer;
+  UpdateInfo? _update;
+  bool _checkingUpdates = false;
   final _search = TextEditingController();
   @override
   void initState() {
@@ -74,6 +79,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _error = widget.initialError;
     _scheduleDayChange();
     _load();
+    unawaited(_checkUpdates());
   }
 
   @override
@@ -86,11 +92,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(_checkUpdates());
+    }
     if (state == AppLifecycleState.resumed && mounted && !_loading) {
       if (_page == 0) {
         setState(() => _date = widget.api.today);
       }
       _load();
+    }
+  }
+
+  Future<void> _checkUpdates() async {
+    if (widget.updates == null || _checkingUpdates) return;
+    _checkingUpdates = true;
+    try {
+      final result = await widget.updates!.check();
+      if (mounted) setState(() => _update = result);
+    } catch (_) {
+      // Release availability is independent of connecting to the news server.
+    } finally {
+      _checkingUpdates = false;
     }
   }
 
@@ -253,7 +275,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _settings() async {
     final saved = await showDialog<bool>(
       context: context,
-      builder: (_) => ConnectionDialog(api: widget.api),
+      builder: (_) => ConnectionDialog(
+        api: widget.api,
+        updates: widget.updates,
+        initialUpdate: _update,
+        onUpdate: (result) {
+          if (mounted) setState(() => _update = result);
+        },
+      ),
     );
     if (saved == true && mounted) {
       setState(() {
@@ -421,6 +450,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 children: [
                                   _heading(),
                                   const SizedBox(height: 24),
+                                  if (_update?.hasUpdate == true &&
+                                      _update?.assetUrl != null) ...[
+                                    UpdateAvailableNotice(
+                                        info: _update!,
+                                        onDownload: () => openLink(
+                                            context, _update!.assetUrl!)),
+                                    const SizedBox(height: 20),
+                                  ],
                                   if (!widget.api.connection.configured)
                                     _welcome()
                                   else ...[
@@ -1065,6 +1102,35 @@ class StatusNotice extends StatelessWidget {
       );
 }
 
+String updateDownloadLabel(UpdateInfo info) =>
+    (info.assetName ?? info.assetUrl ?? '').endsWith('.apk')
+        ? '下载安卓版'
+        : '下载 Windows 版';
+
+class UpdateAvailableNotice extends StatelessWidget {
+  final UpdateInfo info;
+  final VoidCallback onDownload;
+  const UpdateAvailableNotice({
+    super.key,
+    required this.info,
+    required this.onDownload,
+  });
+
+  @override
+  Widget build(BuildContext context) => StatusNotice(
+        icon: Icons.system_update_alt_rounded,
+        message: '新版本 ${info.latestVersion} 已发布，可下载安装包更新。',
+        action: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: FilledButton.tonalIcon(
+            onPressed: onDownload,
+            icon: const Icon(Icons.download_rounded, size: 18),
+            label: Text(updateDownloadLabel(info)),
+          ),
+        ),
+      );
+}
+
 class NewsCard extends StatelessWidget {
   final NewsItem item;
   final VoidCallback onTap, onBookmark;
@@ -1172,7 +1238,16 @@ class NewsCard extends StatelessWidget {
 
 class ConnectionDialog extends StatefulWidget {
   final Api api;
-  const ConnectionDialog({super.key, required this.api});
+  final UpdateService? updates;
+  final UpdateInfo? initialUpdate;
+  final ValueChanged<UpdateInfo>? onUpdate;
+  const ConnectionDialog({
+    super.key,
+    required this.api,
+    this.updates,
+    this.initialUpdate,
+    this.onUpdate,
+  });
   @override
   State<ConnectionDialog> createState() => _ConnectionDialogState();
 }
@@ -1180,8 +1255,19 @@ class ConnectionDialog extends StatefulWidget {
 class _ConnectionDialogState extends State<ConnectionDialog> {
   late final _address = TextEditingController(text: widget.api.connection.base);
   late final _token = TextEditingController(text: widget.api.connection.token);
+  late UpdateInfo? _update = widget.initialUpdate;
   String? _error;
   bool _saving = false, _showToken = false;
+  bool _checkingUpdates = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.updates != null && _update == null) {
+      unawaited(_checkUpdates(force: false));
+    }
+  }
+
   @override
   void dispose() {
     _address.dispose();
@@ -1210,9 +1296,90 @@ class _ConnectionDialogState extends State<ConnectionDialog> {
     }
   }
 
+  Future<void> _checkUpdates({bool force = true}) async {
+    if (widget.updates == null || _checkingUpdates) return;
+    setState(() => _checkingUpdates = true);
+    try {
+      final result = await widget.updates!.check(force: force);
+      if (!mounted) return;
+      setState(() => _update = result);
+      widget.onUpdate?.call(result);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _update = UpdateInfo(
+              state: UpdateState.unavailable,
+              currentVersion: _update?.currentVersion ?? '',
+            ));
+      }
+    } finally {
+      if (mounted) setState(() => _checkingUpdates = false);
+    }
+  }
+
+  String get _updateMessage {
+    final info = _update;
+    if (info == null) return '正在读取应用版本…';
+    if (info.refreshFailed && info.hasUpdate) {
+      return '本次未能刷新，仍可下载已确认的新版本 ${info.latestVersion}。';
+    }
+    return switch (info.state) {
+      UpdateState.available => '发现新版本 ${info.latestVersion}。',
+      UpdateState.current => info.latestVersion == null
+          ? '当前版本无需更新。'
+          : '最新稳定版 ${info.latestVersion}，当前版本无需更新。',
+      UpdateState.unavailable => '暂时无法检查更新，请稍后重试。',
+      UpdateState.unsupported => '当前平台暂不支持应用内更新。',
+    };
+  }
+
+  Widget _updatesPanel() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 18),
+          const Divider(),
+          const SizedBox(height: 12),
+          Text('应用更新', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          if (_update?.currentVersion.isNotEmpty == true)
+            Text('当前版本 ${_update!.currentVersion}',
+                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          const SizedBox(height: 4),
+          Text(_updateMessage, style: const TextStyle(fontSize: 12)),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _checkingUpdates ? null : () => _checkUpdates(),
+                icon: _checkingUpdates
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded, size: 18),
+                label: Text(_checkingUpdates ? '正在检查…' : '检查更新'),
+              ),
+              if (_update?.hasUpdate == true)
+                FilledButton.tonalIcon(
+                  onPressed: () => openLink(context, _update!.assetUrl!),
+                  icon: const Icon(Icons.download_rounded, size: 18),
+                  label: Text(updateDownloadLabel(_update!)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '从 GitHub 官方发布页获取安装包；下载后由你确认安装。',
+            style: TextStyle(fontSize: 11, color: Colors.black54),
+          ),
+        ],
+      );
+
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: const Text('连接你的服务器'),
+        title: const Text('设置'),
         content: SizedBox(
           width: 480,
           child: SingleChildScrollView(
@@ -1260,11 +1427,12 @@ class _ConnectionDialogState extends State<ConnectionDialog> {
                   '令牌保存在设备的系统安全存储中。个人服务器地址和令牌不会随安装包分发。',
                   style: TextStyle(fontSize: 11, color: Colors.black54),
                 ),
+                if (widget.updates != null) _updatesPanel(),
                 TextButton(
                   onPressed: () => showLicensePage(
                       context: context,
                       applicationName: 'Optinfo',
-                      applicationVersion: '0.1.1'),
+                      applicationVersion: _update?.currentVersion),
                   child: const Text('开源许可', style: TextStyle(fontSize: 11)),
                 ),
                 if (_error != null)

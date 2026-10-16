@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'api.dart';
 import 'screens.dart';
+import 'updates.dart';
 
 const ink = Color(0xFF182F31);
 const teal = Color(0xFF257568);
@@ -24,13 +25,18 @@ Future<void> main() async {
   } catch (_) {
     loadError = '无法读取系统凭据，请在连接设置中重新保存访问令牌。';
   }
-  runApp(OptinfoApp(connection: connection, initialError: loadError));
+  runApp(OptinfoApp(
+      connection: connection,
+      initialError: loadError,
+      updates: UpdateService()));
 }
 
 class OptinfoApp extends StatelessWidget {
   final ConnectionStore connection;
   final String? initialError;
-  const OptinfoApp({super.key, required this.connection, this.initialError});
+  final UpdateService? updates;
+  const OptinfoApp(
+      {super.key, required this.connection, this.initialError, this.updates});
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Optinfo',
@@ -107,6 +113,7 @@ class OptinfoApp extends StatelessWidget {
             indicatorColor: Color(0xFFDCEEE7),
           ),
         ),
-        home: HomeScreen(api: Api(connection), initialError: initialError),
+        home: HomeScreen(
+            api: Api(connection), initialError: initialError, updates: updates),
       );
 }
