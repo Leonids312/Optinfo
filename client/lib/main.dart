@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'api.dart';
 import 'screens.dart';
+import 'reading_preferences.dart';
 import 'updates.dart';
 
 const ink = Color(0xFF182F31);
@@ -25,6 +26,7 @@ Future<void> main() async {
   } catch (_) {
     loadError = '无法读取系统凭据，请在连接设置中重新保存访问令牌。';
   }
+  await ReadingPreferencesStore.shared.load();
   runApp(OptinfoApp(
       connection: connection,
       initialError: loadError,
@@ -35,12 +37,21 @@ class OptinfoApp extends StatelessWidget {
   final ConnectionStore connection;
   final String? initialError;
   final UpdateService? updates;
+  final ReadingPreferencesStore? preferences;
   const OptinfoApp(
-      {super.key, required this.connection, this.initialError, this.updates});
+      {super.key,
+      required this.connection,
+      this.initialError,
+      this.updates,
+      this.preferences});
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Optinfo',
         debugShowCheckedModeBanner: false,
+        builder: (context, child) => ReadingPreferencesView(
+          preferences: preferences ?? ReadingPreferencesStore.shared,
+          child: child!,
+        ),
         theme: ThemeData(
           useMaterial3: true,
           brightness: Brightness.light,

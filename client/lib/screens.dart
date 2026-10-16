@@ -7,6 +7,9 @@ import 'api.dart';
 import 'cache.dart';
 import 'main.dart' show ink, teal;
 import 'models.dart';
+import 'paper_figure_image.dart';
+import 'reading_preferences.dart';
+import 'scientific_text.dart';
 import 'updates.dart';
 
 const sectionNames = {'research': '研究进展', 'industry': '产业动态', 'world': '重大事件'};
@@ -388,12 +391,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         if (!wide) ...[
                           const BrandMark(size: 32),
                           const SizedBox(width: 10),
-                          const Text(
-                            'Optinfo',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 20,
-                              letterSpacing: -.8,
+                          const Flexible(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Optinfo',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 20,
+                                  letterSpacing: -.8,
+                                ),
+                              ),
                             ),
                           ),
                         ],
@@ -408,6 +417,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ),
                           ),
                         const Spacer(),
+                        if (wide)
+                          IconButton(
+                            onPressed: () => showDialog<void>(
+                              context: context,
+                              builder: (_) => ReadingSettingsDialog(
+                                preferences: ReadingPreferencesView.of(context),
+                              ),
+                            ),
+                            icon: const Icon(Icons.text_fields_rounded),
+                            tooltip: '阅读设置',
+                          ),
                         IconButton(
                           onPressed: _interests,
                           icon: const Icon(Icons.tune_rounded),
@@ -1195,7 +1215,7 @@ class NewsCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                Text(
+                ScientificText(
                   item.title,
                   style: Theme.of(context)
                       .textTheme
@@ -1204,7 +1224,7 @@ class NewsCard extends StatelessWidget {
                 ),
                 if (item.summary.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  Text(
+                  ScientificText(
                     item.summary,
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
@@ -1222,8 +1242,9 @@ class NewsCard extends StatelessWidget {
                           const TextStyle(fontSize: 11, color: Colors.black45),
                     ),
                     ...item.tags.take(3).map(
-                          (tag) => Text(
+                          (tag) => ScientificText(
                             '# $tag',
+                            maxLines: 1,
                             style: const TextStyle(fontSize: 11, color: teal),
                           ),
                         ),
@@ -1468,13 +1489,17 @@ class InterestsSheet extends StatefulWidget {
 class ArticleScreen extends StatefulWidget {
   final Api api;
   final NewsItem initial;
-  const ArticleScreen({super.key, required this.api, required this.initial});
+  final ReadingPreferencesStore? preferences;
+  const ArticleScreen(
+      {super.key, required this.api, required this.initial, this.preferences});
   @override
   State<ArticleScreen> createState() => _ArticleScreenState();
 }
 
 class _ArticleScreenState extends State<ArticleScreen> {
   late NewsItem _item = widget.initial;
+  late final ReadingPreferencesStore _preferences =
+      widget.preferences ?? ReadingPreferencesView.of(context);
   final _articleScroll = ScrollController();
   final _exploreScroll = ScrollController();
   final _chatPanelKey = GlobalKey<_ChatPanelState>();
@@ -1485,11 +1510,22 @@ class _ArticleScreenState extends State<ArticleScreen> {
   @override
   void initState() {
     super.initState();
+    _preferences.addListener(_readingChanged);
     _reload();
   }
 
+  void _readingChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _readingSettings() => showDialog<void>(
+        context: context,
+        builder: (_) => ReadingSettingsDialog(preferences: _preferences),
+      );
+
   @override
   void dispose() {
+    _preferences.removeListener(_readingChanged);
     _articleScroll.dispose();
     _exploreScroll.dispose();
     super.dispose();
@@ -1552,6 +1588,11 @@ class _ArticleScreenState extends State<ArticleScreen> {
           ),
           actions: [
             IconButton(
+              onPressed: _readingSettings,
+              tooltip: '阅读设置',
+              icon: const Icon(Icons.text_fields_rounded),
+            ),
+            IconButton(
               onPressed: _saving ? null : _bookmark,
               tooltip: _item.bookmarked ? '取消收藏' : '收藏资讯',
               icon: Icon(
@@ -1593,11 +1634,13 @@ class _ArticleScreenState extends State<ArticleScreen> {
               child: LayoutBuilder(builder: (context, constraints) {
                 final overlayOpen = !wide && _exploreOpen;
                 final compactPanel = constraints.maxHeight < 360;
+                final sidebarWidth =
+                    _preferences.value.sidebarWidthFor(constraints.maxWidth);
                 return Stack(
                   fit: StackFit.expand,
                   children: [
                     Positioned.fill(
-                      right: wide ? 414 : 0,
+                      right: wide ? sidebarWidth + 48 : 0,
                       child: ExcludeSemantics(
                         excluding: overlayOpen,
                         child: FocusScope(
@@ -1635,7 +1678,7 @@ class _ArticleScreenState extends State<ArticleScreen> {
                       right: wide ? 24 : 0,
                       top: wide ? 16 : null,
                       bottom: wide ? 16 : 0,
-                      width: wide ? 366 : null,
+                      width: wide ? sidebarWidth : null,
                       height: wide ? null : constraints.maxHeight * .96,
                       child: Offstage(
                         offstage: !wide && !_exploreOpen,
@@ -1794,7 +1837,8 @@ class _ArticleScreenState extends State<ArticleScreen> {
             ],
           ),
           const SizedBox(height: 18),
-          Text(_item.title, style: Theme.of(context).textTheme.headlineMedium),
+          ScientificText(_item.title,
+              style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 24),
           if (_item.summary.isNotEmpty)
             Container(
@@ -1816,7 +1860,7 @@ class _ArticleScreenState extends State<ArticleScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  Text(
+                  ScientificText(
                     _item.summary,
                     style: const TextStyle(fontSize: 16, height: 1.9),
                   ),
@@ -1829,6 +1873,17 @@ class _ArticleScreenState extends State<ArticleScreen> {
               child: Text(
                 '阅读依据 · ${evidenceLabel(_item.evidence)}',
                 style: const TextStyle(fontSize: 11, color: Colors.black54),
+              ),
+            ),
+          if (_item.kind == 'paper' &&
+              (string(_item.raw['analysis_status']) != 'complete' ||
+                  (int.tryParse('${_item.raw['content_revision']}') ?? 0) < 2))
+            Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: StatusNotice(
+                message:
+                    '原文证据正在补全：${paperPendingLabel(string(_item.raw['analysis_status']))}；'
+                    '当前为待校验解读。',
               ),
             ),
           _contentSection(
@@ -1846,7 +1901,8 @@ class _ArticleScreenState extends State<ArticleScreen> {
             _item.kind == 'paper' ? '研究结果' : '已知结果与影响',
             string(_item.content['results']),
           ),
-          for (final figure in _item.figures) FigureView(figure: figure),
+          for (final figure in _item.figures)
+            FigureView(api: widget.api, figure: figure),
           if (_item.kind == 'paper' && _item.figures.isEmpty)
             const Padding(
               padding: EdgeInsets.only(top: 12),
@@ -1912,7 +1968,7 @@ class _ArticleScreenState extends State<ArticleScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          Text(content, style: Theme.of(context).textTheme.bodyLarge),
+          ScientificText(content, style: Theme.of(context).textTheme.bodyLarge),
         ],
       ),
     );
@@ -1940,7 +1996,8 @@ class _ArticleScreenState extends State<ArticleScreen> {
               children: _item.tags
                   .map(
                     (tag) => Chip(
-                      label: Text(tag, style: const TextStyle(fontSize: 11)),
+                      label: ScientificText(tag,
+                          maxLines: 1, style: const TextStyle(fontSize: 11)),
                       backgroundColor: Colors.white,
                       side: const BorderSide(color: Color(0xFFE1E7E1)),
                     ),
@@ -1969,20 +2026,38 @@ String evidenceLabel(String value) =>
     }[value] ??
     value;
 
+String paperPendingLabel(String status) =>
+    {
+      'pending_fulltext': '尚未取得可用全文',
+      'pending_figures': '原文结果图与中文图注待补充',
+      'pending_analysis': '全文分析待重新生成',
+    }[status] ??
+    '全文分析与原文图文证据待复核';
+
 class FigureView extends StatelessWidget {
+  final Api api;
   final Json figure;
-  const FigureView({super.key, required this.figure});
+  const FigureView({super.key, required this.api, required this.figure});
   @override
   Widget build(BuildContext context) {
     final url = string(figure['url']);
     final uri = Uri.tryParse(url);
+    final imagePath = string(figure['image_path']);
+    final caption = string(figure['caption']);
+    final originalCaption = string(figure['original_caption']);
+    final reason = string(figure['selection_reason']);
     return Padding(
       padding: const EdgeInsets.only(top: 22),
       child: Surface(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (uri != null && uri.scheme == 'https' && uri.host.isNotEmpty)
+            if (imagePath.isNotEmpty)
+              PaperFigureImage(api: api, path: imagePath)
+            else if (uri != null &&
+                uri.scheme == 'https' &&
+                uri.host.isNotEmpty &&
+                uri.userInfo.isEmpty)
               Image.network(
                 url,
                 width: double.infinity,
@@ -2015,10 +2090,31 @@ class FigureView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    string(figure['caption']),
-                    style: const TextStyle(fontSize: 12),
+                  ScientificText(
+                    caption,
+                    style: const TextStyle(fontSize: 13, height: 1.7),
                   ),
+                  if (reason.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    ScientificText('关键结果 · $reason',
+                        style: const TextStyle(
+                            fontSize: 12, height: 1.7, color: Colors.black54)),
+                  ],
+                  if (originalCaption.isNotEmpty && originalCaption != caption)
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      childrenPadding: const EdgeInsets.only(bottom: 12),
+                      expandedAlignment: Alignment.centerLeft,
+                      title: const Text('原文图注',
+                          style: TextStyle(fontSize: 12, color: teal)),
+                      children: [
+                        ScientificText(originalCaption,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                height: 1.7,
+                                color: Colors.black54)),
+                      ],
+                    ),
                   if (string(figure['source_url']).isNotEmpty)
                     SourceLink(
                       title: '原文图片来源',
@@ -2051,7 +2147,7 @@ class SourceLink extends StatelessWidget {
                 const Icon(Icons.north_east_rounded, size: 16, color: teal),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
+                  child: ScientificText(
                     title.isNotEmpty ? title : Uri.tryParse(url)?.host ?? '来源',
                     style: const TextStyle(
                       fontSize: 12,
@@ -2233,7 +2329,7 @@ class _ChatPanelState extends State<ChatPanel> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      Text(
+                      ScientificText(
                         string(message['content']),
                         style: const TextStyle(fontSize: 13, height: 1.8),
                       ),

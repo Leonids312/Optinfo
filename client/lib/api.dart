@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
 import 'cache.dart';
+import 'paper_media.dart';
 
 class ApiFailure implements Exception {
   final String message;
@@ -74,6 +75,12 @@ class Api {
   Api(this.connection, {LocalQueryCache? cache, DateTime Function()? clock})
       : clock = clock ?? DateTime.now,
         cache = cache ?? LocalQueryCache(clock: clock);
+
+  Future<Uint8List> figureImage(String path) => fetchPaperImage(
+        base: ConnectionStore.normalize(connection.base),
+        token: connection.token,
+        path: path,
+      );
 
   String get today => clock()
       .toUtc()

@@ -12,12 +12,13 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from . import __version__
 from .config import SHANGHAI, Settings, now_shanghai
 from .db import Database
 from .models import BookmarkRequest, PreferencesRequest, QuestionRequest
+from .media import media_path, media_root
 
 
 def _catalog():
@@ -133,6 +134,16 @@ def create_app(settings: Settings | None = None, *, clock=now_shanghai, harness=
             raise HTTPException(401, "设备访问令牌无效", headers={"WWW-Authenticate": "Bearer"})
 
     auth = [Depends(authenticate)]
+
+    @app.get("/api/media/{name}", dependencies=auth)
+    async def get_media(name: str):
+        try:
+            path = media_path(name, media_root(settings.db_path))
+            if not path.is_file():
+                raise ValueError("Missing media")
+        except ValueError:
+            raise HTTPException(404, "原文图片暂不可用") from None
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/health")
     async def health():

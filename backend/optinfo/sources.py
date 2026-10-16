@@ -24,9 +24,16 @@ import feedparser
 import httpx
 
 from .catalog import JOURNALS, match_companies
+from .paper_evidence import figure_candidates, pdf_evidence, preserve_math, text_with_math
+from .media import MAX_IMAGE_BYTES, render_pdf_page, store_image
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 USER_AGENT = "Optinfo/0.1 (+https://github.com/Leonids312/Optinfo; personal research digest)"
+# Publisher-owned alternate observed from the canonical DOI resolver. Never
+# derive/guess subscription URLs or accept arbitrary alternates from model text.
+PUBLISHER_ALTERNATES = {
+    "10.1063/5.0351260": "https://aipp.silverchair-cdn.com/article-minimal/3406441",
+}
 FEEDS = [
     {"id": "nature-photonics", "name": "Nature Photonics", "url": "https://www.nature.com/nphoton.rss", "section": "research", "journal": "Nature Photonics"},
     {"id": "light", "name": "Light: Science & Applications", "url": "https://www.nature.com/lsa.rss", "section": "research", "journal": "Light: Science & Applications"},
@@ -47,24 +54,30 @@ HTML_SOURCES = [
 ]
 
 def plain_text(value: str, limit: int = 20000) -> str:
-    return " ".join(BeautifulSoup(value or "", "html.parser").get_text(" ", strip=True).split())[:limit]
+    return text_with_math(value, limit)
 
 def public_url(url: str) -> bool:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password or parsed.port not in {None, 80, 443}:
-        return False
     try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password or parsed.port not in {None, 80, 443}:
+            return False
         ips = {r[4][0] for r in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)}
         return bool(ips) and all(ipaddress.ip_address(ip).is_global for ip in ips)
     except (OSError, ValueError):
         return False
 
 def fetch(url: str, max_bytes: int = 3_000_000, timeout: float = 18) -> tuple[str, str]:
+    data, final_url, content_type = fetch_bytes(url, max_bytes, timeout)
+    charset = re.search(r"charset=([\w-]+)", content_type, re.I)
+    return data.decode(charset[1] if charset else "utf-8", errors="replace"), final_url
+
+
+def fetch_bytes(url: str, max_bytes: int = 3_000_000, timeout: float = 18) -> tuple[bytes, str, str]:
     # Validate each redirect so an untrusted feed cannot redirect into local services.
     for attempt in range(2):
         try:
             current = url
-            with httpx.Client(timeout=timeout, headers={"User-Agent": USER_AGENT}, follow_redirects=False, trust_env=not urlparse(url).hostname.endswith(".gov.cn")) as client:
+            with httpx.Client(timeout=timeout, headers={"User-Agent": USER_AGENT}, follow_redirects=False, trust_env=not (urlparse(url).hostname or "").endswith(".gov.cn")) as client:
                 for _ in range(5):
                     if not public_url(current):
                         raise ValueError("Source URL must resolve to a public host")
@@ -78,8 +91,7 @@ def fetch(url: str, max_bytes: int = 3_000_000, timeout: float = 18) -> tuple[st
                             chunks.extend(chunk)
                             if len(chunks) > max_bytes:
                                 raise ValueError("Source response exceeds size limit")
-                        charset = response.encoding or "utf-8"
-                        return bytes(chunks).decode(charset, errors="replace"), current
+                        return bytes(chunks), current, response.headers.get("content-type", "")
                 raise ValueError("Too many source redirects")
         except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
             if attempt or isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
@@ -237,45 +249,64 @@ def enrich(item: dict) -> dict:
     arXiv HTML provides actual figures with captions. Publisher pages are accepted
     as fulltext only when a real article body is present (never a subscription preview).
     """
-    result = dict(item)
+    result = dict(item, figure_candidates=[], figures=[])
+    # Repair must prove access anew. An old full-text label is not evidence of
+    # a successful retrieval today and must not suppress fresh PDF extraction.
+    if result.get("evidence_level") in {"fulltext", "fulltext_pdf"}:
+        result.update(evidence_level="metadata", evidence_text="", math_extraction="unavailable")
+        result.pop("evidence_url", None)
+        result.pop("pdf_source_url", None)
+        result.pop("_pdf_bytes", None)
     url = item["source_url"]
     arxiv_match = re.search(r"arxiv\.org/abs/(\d{4}\.\d{4,5}(?:v\d+)?)", url)
+    pdf_urls = ["https://arxiv.org/pdf/" + arxiv_match.group(1)] if arxiv_match else []
     if arxiv_match:
         url = "https://arxiv.org/html/" + arxiv_match.group(1)
     # DOI resolution and public article redirects are bounded by fetch().
     try:
-        body, final_url = fetch(url, max_bytes=4_000_000, timeout=20)
+        try:
+            body, final_url = fetch(url, max_bytes=4_000_000, timeout=20)
+        except Exception:
+            alternate = PUBLISHER_ALTERNATES.get(item.get("doi", "").lower())
+            if not alternate:
+                raise
+            body, final_url = fetch(alternate, max_bytes=4_000_000, timeout=20)
         soup = BeautifulSoup(body, "html.parser")
+        for meta in soup.select('meta[name="citation_pdf_url"], meta[name="dc.identifier"]'):
+            value = urljoin(final_url, meta.get("content", ""))
+            if value.startswith("https://") and ("pdf" in value.lower() or meta.get("name") == "citation_pdf_url"):
+                pdf_urls.append(value)
+        math_count = preserve_math(soup)
         for node in soup.select("script,style,nav,header,footer,aside,form"):
             node.decompose()
         blocked = any(marker in soup.get_text(" ", strip=True)[:5000].lower() for marker in ("verify you are human", "access denied", "captcha", "checking your browser"))
         if blocked:
             result["access_status"] = "verification_required"
-            return result
+            raise ValueError("Article verification required")
         if arxiv_match:
             article = soup.select_one("article.ltx_document, .ltx_document")
         elif item["section"] == "research":
             article = soup.select_one("[data-title='Main'], #Main-content, .article-body, .hlFld-Fulltext")
+            if article is None and soup.select_one("article .c-article-section__content"):
+                nature_article = soup.select_one("article")
+                headings = [node.get_text(" ", strip=True).casefold() for node in nature_article.select("h2, h3")]
+                substantive = sum(bool(re.match(r"^(?:\d+[.\s]+)?(?:results?|discussion|methods?|materials? and methods?|conclusions?|introduction|main)\b", text)) for text in headings)
+                preview = re.search(r"(?:preview of subscription content|access this article through your institution|subscribe to read|purchase this article)", nature_article.get_text(" ", strip=True), re.I)
+                # Abstracts and graphical previews can be long and have figures.
+                # Require real full-text section headings as independent evidence.
+                if substantive >= 2 and not preview:
+                    article = nature_article
+            if article is None:
+                article = soup.select_one(".widget-ArticleFulltext")
         else:
             article = soup.select_one("article, .article-body, .release-body, .main-body, #article, .TRS_Editor, #zoom, .news_detail, .news-detail, .detail_content, .content-area")
         if article and len(article.get_text(" ", strip=True)) > (1200 if item["section"] == "research" else 200):
-            result["evidence_text"] = article.get_text(" ", strip=True)[:26000]
+            result["evidence_text"] = article.get_text(" ", strip=True)[:42000]
             result["evidence_level"] = "fulltext" if item["section"] == "research" else "source_article"
             result["access_status"] = "accessible"
             result["evidence_url"] = final_url
-            figures = []
-            for fig in soup.select("figure.ltx_figure, figure")[:12]:
-                caption = fig.select_one("figcaption, .ltx_caption, .c-article-section__figure-caption")
-                img = fig.select_one("img")
-                if not caption or not img:
-                    continue
-                image_url = urljoin(final_url, img.get("src") or img.get("data-src") or "")
-                if image_url == final_url or not image_url.startswith("https://"):
-                    continue
-                figures.append({"url": image_url, "caption": caption.get_text(" ", strip=True)[:1200], "source_url": final_url})
-                if len(figures) == 3:
-                    break
-            result["figures"] = figures
+            result["figure_candidates"] = figure_candidates(article, final_url)
+            result["math_extraction"] = "latex_preserved" if math_count else "no_embedded_math"
         else:
             # Abstract extraction is useful for Crossref metadata-only candidates.
             abstract = soup.select_one("#Abs1-content, .abstract, #abstract, .c-article-section__content")
@@ -285,4 +316,32 @@ def enrich(item: dict) -> dict:
             result["access_status"] = "abstract_only" if item["section"] == "research" else "feed_only"
     except Exception as exc:
         result["access_status"] = "unavailable_" + type(exc).__name__
+    if item["section"] == "research" and (result.get("evidence_level") != "fulltext" or not result["figure_candidates"]):
+        for pdf_url in list(dict.fromkeys(pdf_urls))[:2]:
+            try:
+                data, pdf_final, _ = fetch_bytes(pdf_url, max_bytes=25_000_000, timeout=30)
+                evidence = pdf_evidence(data, pdf_final)
+                if len(evidence["evidence_text"]) < 1200:
+                    raise ValueError("PDF has insufficient extractable text")
+                if result.get("evidence_level") == "fulltext":
+                    result.update({key: evidence[key] for key in ("figure_candidates", "_pdf_bytes")})
+                    result["pdf_source_url"] = pdf_final
+                else:
+                    result.update(evidence)
+                if result["figure_candidates"]:
+                    break
+            except Exception as exc:
+                result["pdf_status"] = "unavailable_" + type(exc).__name__
     return result
+
+
+def materialize_figure(candidate: dict, figure: dict) -> str:
+    if figure.get("kind") == "pdf_page":
+        data = candidate.get("_pdf_bytes")
+        if not isinstance(data, bytes):
+            raise ValueError("Missing verified source PDF")
+        return store_image(render_pdf_page(data, int(figure["page"])))
+    data, _, content_type = fetch_bytes(figure["url"], max_bytes=MAX_IMAGE_BYTES, timeout=20)
+    if not content_type.lower().startswith("image/"):
+        raise ValueError("Original figure is not an image")
+    return store_image(data)

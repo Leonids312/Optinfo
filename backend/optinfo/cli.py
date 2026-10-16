@@ -56,8 +56,11 @@ def cleanup(db: Database, settings: Settings) -> int:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Optinfo daily and major-event jobs")
-    parser.add_argument("command", choices=["generate", "major-events", "cleanup", "check", "collect"])
+    parser.add_argument("command", choices=["generate", "major-events", "cleanup", "check", "collect", "repair-papers"])
     parser.add_argument("--date", default=now_shanghai().date().isoformat())
+    parser.add_argument("--item-id", action="append", help="Existing paper id to repair; repeat for multiple papers")
+    parser.add_argument("--limit", type=int, default=20, help="Maximum existing papers to repair (1–50)")
+    parser.add_argument("--force", action="store_true", help="Recheck already upgraded papers")
     args = parser.parse_args(argv)
     day = date.fromisoformat(args.date).isoformat()
     settings = Settings.from_env()
@@ -75,6 +78,12 @@ def main(argv=None) -> int:
         print(json.dumps({"count": len(items), "sources": diagnostics, "titles": [{"title": i["title"], "section": i["section"], "url": i["source_url"], "published_at": i["published_at"]} for i in items]}, ensure_ascii=False))
         return 0
     with generation_lock(settings.db_path.parent / "generation.lock"):
+        if args.command == "repair-papers":
+            from .pipeline import repair_papers
+            result = repair_papers(db, db.preferences_for_date(day, DEFAULT_TOPIC_IDS),
+                                   item_ids=set(args.item_id) if args.item_id else None, limit=args.limit, force=args.force)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
         if args.command == "generate" and db.edition_exists(day):
             print(json.dumps({"date": day, "status": "already_generated"}))
             return 0
@@ -85,7 +94,7 @@ def main(argv=None) -> int:
         previous = db.get_edition(day) if args.command == "generate" else None
         if previous and previous["status"] == "partial":
             retry_ids = {entry["item"] for entry in previous["metadata"].get("diagnostics", [])
-                         if entry.get("item") and entry.get("status") in {"model_failed", "retry_missing", "retry_deferred"}}
+                         if entry.get("item") and entry.get("status") in {"model_failed", "retry_missing", "retry_deferred", "evidence_pending"}}
             if not retry_ids:
                 # Do not silently replace an unknown older partial state with a
                 # newly selected batch or falsely mark unresolved work complete.
@@ -110,9 +119,9 @@ def main(argv=None) -> int:
                 result["diagnostics"] = retained + result["diagnostics"]
             db.save_edition(day, result["items"], generated_at=result["generated_at"], status=result["status"], metadata={"topics": topic_ids, "diagnostics": result["diagnostics"]})
         db.mark_reviewed(day, result.get("reviewed_ids", []))
-        failures = [d for d in result["diagnostics"] if d["status"] in {"model_failed", "retry_missing", "retry_deferred"}]
+        failures = [d for d in result["diagnostics"] if d["status"] in {"model_failed", "retry_missing", "retry_deferred", "evidence_pending"}]
         # Only fixed operational fields, never raw model text or exception payloads.
-        safe_failures = [{key: entry[key] for key in ("item", "status", "error", "stage", "exception_type", "finish_reason", "attempts") if key in entry} for entry in failures]
+        safe_failures = [{key: entry[key] for key in ("item", "status", "reason", "error", "stage", "exception_type", "finish_reason", "attempts") if key in entry} for entry in failures]
         source_errors = [{key: entry[key] for key in ("source", "status", "error") if key in entry}
                          for entry in result["diagnostics"] if entry["status"] == "failed"]
         print(json.dumps({"date": day, "status": result["status"], "items": len(result["items"]), "source_failures": sum(d["status"] == "failed" for d in result["diagnostics"]),

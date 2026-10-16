@@ -18,13 +18,15 @@ def test_pipeline_cli_edition_and_api_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "now_shanghai", lambda: now)
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
     raw = candidate("Ultrafast research test fixture", "https://example.org/paper", "Test fixture", "research", "2026-10-15T10:00:00+00:00", "Evidence for a test fixture. " * 20, journal="Nature Photonics")
+    raw.update(evidence_level="fulltext", figure_candidates=[{"id": "fig-test", "url": "https://example.org/figure.png", "source_url": raw["source_url"], "original_caption": "Figure 5. Test result.", "kind": "original_image"}])
+    monkeypatch.setattr(pipeline, "materialize_figure", lambda *args: "/api/media/" + "a" * 64 + ".png")
     monkeypatch.setattr(pipeline, "collect", lambda _: ([raw], [{"source": "test-fixture", "status": "ok", "count": 1}]))
     monkeypatch.setattr(pipeline, "enrich", lambda value: value)
     calls = []
 
     def analyze(value, labels, day):
         calls.append(day)
-        return {"title": "超快研究测试样本", "summary": "仅用于自动化测试的证据摘要", "importance": 80, "publish": True, "content": {"background": "背景", "approach": "方案", "results": "结果", "assessment": "局限"}, "tags": ["ultrafast"]}
+        return {"title": "超快研究测试样本", "summary": "仅用于自动化测试的证据摘要", "importance": 80, "publish": True, "content": {"background": "背景", "approach": "方案", "results": "结果", "assessment": "局限"}, "tags": ["ultrafast"], "selected_figures": [{"id": "fig-test", "caption": "图五为原始实验的测量结果。", "selection_reason": "该图对应正文的主要实验结果。", "role": "result"}]}
 
     monkeypatch.setattr(pipeline, "analyze_candidate", analyze)
     assert cli.main(["generate", "--date", "2026-10-16"]) == 0
@@ -36,8 +38,8 @@ def test_pipeline_cli_edition_and_api_contract(tmp_path, monkeypatch):
         assert result["status"] == "ready" and len(result["items"]) == 1
         entry = result["items"][0]
         assert entry["source_url"] == "https://example.org/paper"
-        assert "基于摘要" in entry["content"]["assessment"]
-        assert entry["figures"] == []
+        assert entry["analysis_status"] == "complete"
+        assert entry["figures"][0]["caption"] == "图五为原始实验的测量结果。"
         assert client.get("/api/briefing?journal=nphoton").json()["items"][0]["id"] == entry["id"]
 
 

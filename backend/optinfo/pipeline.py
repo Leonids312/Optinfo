@@ -8,12 +8,54 @@ import re
 from zoneinfo import ZoneInfo
 
 from .catalog import COMPANIES, TOPICS, match_companies
-from .harness import HarnessUnavailable, analyze_candidate, is_configured, safe_error_details
-from .sources import collect, enrich
+from .harness import HarnessUnavailable, analyze_candidate, chinese_caption, is_configured, safe_error_details
+from .sources import collect, enrich, materialize_figure
 
 
 class SourceCollectionUnavailable(RuntimeError):
     stage = "collect"
+
+class EvidencePending(ValueError):
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+def require_paper_evidence(candidate: dict):
+    if candidate["section"] != "research":
+        return
+    if candidate.get("evidence_level") not in {"fulltext", "fulltext_pdf"}:
+        raise EvidencePending("pending_fulltext")
+    if not candidate.get("figure_candidates"):
+        raise EvidencePending("pending_figures")
+
+def selected_figures(candidate: dict, analysis: dict) -> list[dict]:
+    if candidate["section"] != "research":
+        return []
+    require_paper_evidence(candidate)
+    available = {figure["id"]: figure for figure in candidate["figure_candidates"]}
+    chosen = analysis.get("selected_figures", [])
+    if not isinstance(chosen, list) or not 1 <= len(chosen) <= 6:
+        raise EvidencePending("pending_figures")
+    result, seen = [], set()
+    for selection in chosen:
+        if not isinstance(selection, dict) or selection.get("id") not in available or selection["id"] in seen:
+            raise EvidencePending("pending_figures")
+        caption, reason = selection.get("caption", ""), selection.get("selection_reason", "")
+        if (selection.get("role") != "result" or not isinstance(caption, str) or not isinstance(reason, str)
+                or not chinese_caption(caption) or not chinese_caption(reason)):
+            raise EvidencePending("pending_figures")
+        original = available[selection["id"]]
+        try:
+            image_path = materialize_figure(candidate, original)
+        except Exception:
+            raise EvidencePending("pending_figures") from None
+        figure = {key: original[key] for key in ("id", "url", "source_url", "kind", "page", "label", "original_caption") if key in original}
+        if original.get("kind") == "pdf_page":
+            caption = f"原文第{original['page']}页（含{original.get('label', '结果图')}）。" + caption
+        figure.update(caption=caption[:2600], selection_reason=reason[:1000], image_path=image_path)
+        result.append(figure)
+        seen.add(selection["id"])
+    return result
 
 def score_candidate(item: dict, topic_ids: list[str]) -> float:
     haystack = " ".join(str(item.get(k, "")) for k in ("title", "evidence_text", "journal")).casefold()
@@ -41,14 +83,15 @@ def sanitize_analysis(candidate: dict, analysis: dict, edition_date: str) -> dic
     if not isinstance(analysis.get("summary"), str) or not isinstance(analysis.get("title"), str) or not analysis["summary"].strip() or not analysis["title"].strip():
         return None
     clean_content = {k: content[k][:9000] for k in ("background", "approach", "results", "assessment")}
-    if candidate["section"] == "research" and candidate.get("evidence_level") != "fulltext":
-        clean_content["assessment"] += "\n证据范围：基于摘要，未取得全文；未提供原文结果图时不展示推测图。"
+    figures = selected_figures(candidate, analysis)
     return {"id": candidate["id"], "kind": candidate["kind"], "section": candidate["section"],
             "title": analysis["title"][:300], "summary": analysis["summary"][:1800], "published_at": candidate["published_at"],
             "briefing_date": edition_date, "source_url": candidate["source_url"], "source_name": candidate["source_name"],
             "doi": candidate.get("doi", ""), "journal": candidate.get("journal", ""), "company_ids": candidate.get("company_ids", []),
             "tags": [str(t)[:80] for t in analysis.get("tags", [])[:8]] if isinstance(analysis.get("tags"), list) else [],
-            "importance": importance, "content": clean_content, "figures": candidate.get("figures", []),
+            "importance": importance, "content": clean_content, "figures": figures,
+            "content_revision": 2, "analysis_status": "complete",
+            "math_extraction": candidate.get("math_extraction", ""),
             "sources": [{"title": candidate["title"], "url": candidate["source_url"]}] + ([{"title": "原文正文与图表", "url": candidate["evidence_url"]}] if candidate.get("evidence_url") and candidate["evidence_url"] != candidate["source_url"] else []),
             "evidence_level": candidate["evidence_level"], "evidence_text": candidate.get("evidence_text", ""), "bookmarked": False}
 
@@ -103,6 +146,7 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
     labels = [t["label"] for t in TOPICS if t["id"] in topic_ids]
     items, failures, companies, reviewed_ids = [], len(missing) + len(deferred), {c["id"]: c for c in COMPANIES}, []
     seen_titles = set()
+    model_failures = 0
     for index, raw in enumerate(ranked):
         if retry_scope is None and sum(i["section"] == raw["section"] for i in items) >= limits[raw["section"]]:
             continue
@@ -119,20 +163,26 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
                                 "error": "InsufficientEvidence"})
             continue
         try:
+            require_paper_evidence(candidate)
             analysis = analyze_candidate(candidate, labels, edition_date)
-            reviewed_ids.append(candidate["id"])
             item = sanitize_analysis(candidate, analysis, edition_date)
+            reviewed_ids.append(candidate["id"])
             if item:
                 for company in discovered_companies(candidate, analysis):
                     companies[company["id"]] = company
                     item["company_ids"] = list(dict.fromkeys([*item["company_ids"], company["id"]]))
                 items.append(item)
             diagnostics.append({"item": candidate["id"], "status": "published" if item else "filtered", "access": candidate.get("access_status", "")})
+        except EvidencePending as exc:
+            failures += 1
+            diagnostics.append({"item": candidate["id"], "status": "evidence_pending", "reason": exc.reason,
+                                "access": candidate.get("access_status", "")})
         except Exception as exc:
             failures += 1
+            model_failures += 1
             diagnostics.append({"item": candidate["id"], "status": "model_failed", **safe_error_details(exc)})
             # Avoid billing/retrying an outage for the whole candidate set.
-            if failures >= 3 and not items:
+            if model_failures >= 3 and not items:
                 diagnostics.extend({"item": item["id"], "status": "retry_deferred"} for item in ranked[index + 1:])
                 break
     # Preserve successful filtered decisions even when nothing is published;
@@ -140,3 +190,45 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
     return {"items": sorted(items, key=lambda i: (i["section"], -i["importance"])), "companies": list(companies.values()),
             "diagnostics": diagnostics, "status": "partial" if failures else "ready", "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
             "topic_ids": topic_ids, "reviewed_ids": reviewed_ids}
+
+
+def repair_papers(db, topic_ids: list[str], *, item_ids: set[str] | None = None, limit: int = 20, force: bool = False) -> dict:
+    """Re-read existing paper sources without adding articles or changing IDs."""
+    if not is_configured():
+        raise HarnessUnavailable("官方 DeepSeek Harness 尚未就绪，未改写论文内容。")
+    labels = [topic["label"] for topic in TOPICS if topic["id"] in topic_ids]
+    originals = {item["id"]: item for item in db.query_items() if item.get("section") == "research"}
+    if item_ids is not None and item_ids - originals.keys():
+        raise ValueError("Unknown research item requested")
+    result = []
+    for item_id in sorted(originals):
+        if item_ids is not None and item_id not in item_ids:
+            continue
+        original = db.get_item(item_id)
+        if not force and original.get("content_revision", 0) >= 2 and original.get("analysis_status") == "complete":
+            continue
+        if len(result) >= max(1, min(limit, 50)):
+            break
+        at = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
+        # Even a crash must not leave old English-only/no-figure content labelled
+        # as a complete current analysis. Identity and private user data stay put.
+        db.repair_item_content(item_id, {"analysis_status": "pending_analysis", "figures": [], "repair_reason": "evidence_upgrade", "repaired_at": at})
+        try:
+            candidate = enrich(original)
+            require_paper_evidence(candidate)
+            analysis = analyze_candidate(candidate, labels, original["briefing_date"])
+            # Editorial filtering cannot delete an already saved item; it remains
+            # visibly pending until a valid evidence-backed repair is available.
+            repaired = sanitize_analysis(candidate, analysis, original["briefing_date"])
+            if repaired is None:
+                raise EvidencePending("pending_analysis")
+            patch = {key: repaired[key] for key in ("title", "summary", "content", "figures", "sources", "evidence_level", "evidence_text", "content_revision", "analysis_status", "math_extraction")}
+            patch.update(repair_reason="", repaired_at=at)
+            snapshots = db.repair_item_content(item_id, patch)
+            result.append({"item": item_id, "status": "repaired", "snapshots": snapshots, "figures": len(patch["figures"])})
+        except EvidencePending as exc:
+            db.repair_item_content(item_id, {"analysis_status": exc.reason, "repair_reason": exc.reason, "repaired_at": at})
+            result.append({"item": item_id, "status": "evidence_pending", "reason": exc.reason})
+        except Exception as exc:
+            result.append({"item": item_id, "status": "model_failed", **safe_error_details(exc)})
+    return {"status": "partial" if any(entry["status"] != "repaired" for entry in result) else "ready", "items": result}

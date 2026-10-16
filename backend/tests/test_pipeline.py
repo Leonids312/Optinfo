@@ -9,13 +9,22 @@ from optinfo.catalog import match_companies
 
 
 def sample(section="research"):
-    return sources.candidate("Ultrafast electron-phonon dynamics", "https://example.org/paper", "Journal", section,
+    value = sources.candidate("Ultrafast electron-phonon dynamics", "https://example.org/paper", "Journal", section,
                              "2026-10-15T12:00:00+00:00", "A real abstract with experimental evidence. " * 8, journal="Journal")
+    if section == "research":
+        value.update(evidence_level="fulltext", figure_candidates=[{"id": "fig-verified", "url": "https://example.org/real.png", "source_url": value["source_url"], "original_caption": "Figure 4. Experimental result.", "kind": "original_image"}])
+    return value
 
 
 def analysis(**extra):
     return {"title": "超快动力学研究", "summary": "实验测得可重复的变化，具体条件见原文。", "importance": 85, "publish": True,
+            "selected_figures": [{"id": "fig-verified", "caption": "图四展示实验测量的原始结果。", "selection_reason": "对应正文中实验测量的主要结论。", "role": "result"}],
             "content": {k: "仅根据所提供证据解释。" for k in ("background", "approach", "results", "assessment")}, **extra}
+
+
+@pytest.fixture(autouse=True)
+def mock_figure_download(monkeypatch):
+    monkeypatch.setattr(pipeline, "materialize_figure", lambda *args: "/api/media/" + "a" * 64 + ".png")
 
 
 def test_preference_changes_research_rank():
@@ -35,9 +44,9 @@ def test_dates_do_not_invent_current_publication_date():
 def test_summary_cannot_acquire_model_invented_figure_or_source():
     item = sample()
     result = pipeline.sanitize_analysis(item, analysis(figures=[{"url": "https://fake.invalid/plot.png"}], source_url="https://fake.invalid"), "2026-10-16")
-    assert result["figures"] == []
+    assert result["figures"][0]["url"] == "https://example.org/real.png"
     assert result["source_url"] == item["source_url"]
-    assert "未取得全文" in result["content"]["assessment"]
+    assert "fake.invalid" not in json.dumps(result)
 
 
 def test_world_low_importance_and_blank_analysis_not_published():

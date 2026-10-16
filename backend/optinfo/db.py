@@ -159,6 +159,31 @@ class Database:
                 conflict = "DO UPDATE SET data_json=excluded.data_json" if overwrite else "DO NOTHING"
                 conn.execute("INSERT INTO companies VALUES(?,?) ON CONFLICT(id) " + conflict, (value["id"], _json(value)))
 
+    def repair_item_content(self, item_id: str, patch: dict) -> int:
+        """Explicit evidence correction, preserving dates/ranking and user data.
+
+        Unlike daily ingestion, repair deliberately updates every historical
+        snapshot. The allowlist excludes identity, ranking, bookmarks and chats.
+        """
+        allowed = {"title", "summary", "content", "figures", "sources", "evidence_level", "evidence_text",
+                   "content_revision", "analysis_status", "repair_reason", "repaired_at", "math_extraction"}
+        if not patch or set(patch) - allowed:
+            raise ValueError("Invalid evidence repair fields")
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT data_json FROM items WHERE id=?", (item_id,)).fetchone()
+            if row is None:
+                raise KeyError(item_id)
+            value = json.loads(row[0])
+            value.update(patch)
+            conn.execute("UPDATE items SET data_json=?, updated_at=? WHERE id=?", (_json(value), now_shanghai().isoformat(), item_id))
+            rows = conn.execute("SELECT date,data_json FROM edition_items WHERE item_id=?", (item_id,)).fetchall()
+            for row in rows:
+                snapshot = json.loads(row["data_json"])
+                snapshot.update(patch)
+                conn.execute("UPDATE edition_items SET data_json=? WHERE date=? AND item_id=?", (_json(snapshot), row["date"], item_id))
+        return len(rows)
+
     def available_dates(self) -> list[str]:
         with self.connection() as conn:
             return [row[0] for row in conn.execute("SELECT date FROM editions ORDER BY date DESC")]

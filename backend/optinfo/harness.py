@@ -22,7 +22,8 @@ SYSTEM_PROMPT = """你是 Optinfo 的中文科研与产业资讯分析员。只�
 没有任何外部工具可用。不得声称已浏览未提供的页面，不得编造论文图表、数据、薪资或来源。
 区分实测、作者宣称、企业公告与推断。摘要无法支持的细节明确说未获取；未知就说未知。
 适当解释机理及关联，但须标注推断。所有来源仅使用输入中的来源。中文回答。
-界面以纯文本展示：回答使用清晰段落和编号，不使用 Markdown 加粗符号、标题标记或表格。
+回答使用清晰段落和编号，不使用 Markdown 加粗符号、标题标记或表格。
+所有数学公式使用 LaTeX，行内用 \\( ... \\)，独立公式用 \\[ ... \\]。依据原文保留符号、上下标、分式和单位，不猜测缺失公式。
 """
 PATCH = """# Pinned to deepseek-harness-sdk 0.1.5rc1; intentionally no model tools.
 - id: persistent-bash
@@ -66,6 +67,13 @@ class _CompanyMention(BaseModel):
     name: StrictStr = Field(min_length=2, max_length=100)
     evidence_quote: StrictStr = Field(min_length=1, max_length=500)
 
+class _SelectedFigure(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: StrictStr = Field(min_length=1, max_length=80)
+    caption: StrictStr = Field(min_length=5, max_length=2400)
+    selection_reason: StrictStr = Field(min_length=5, max_length=1000)
+    role: StrictStr = Field(pattern="^result$")
+
 class _Analysis(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     title: StrictStr = Field(min_length=1, max_length=300)
@@ -75,12 +83,54 @@ class _Analysis(BaseModel):
     content: _Content
     tags: list[StrictStr] = Field(max_length=8)
     company_mentions: list[_CompanyMention] = Field(max_length=6)
+    selected_figures: list[_SelectedFigure] = Field(max_length=6)
+
+def validate_math_format(text: str) -> None:
+    """Reject broken delimiters and clearly unwrapped TeX, not prose/currency."""
+    text = re.sub(r"https?://\S+", "", text)
+    tokens = list(re.finditer(r"\\[()\[\]]|(?<!\\)\$\$?", text))
+    opening, spans = None, []
+    pairs = {r"\(": r"\)", r"\[": r"\]", "$": "$", "$$": "$$"}
+    for token in tokens:
+        value = token[0]
+        # A lone dollar followed by a price is ordinary currency, not math.
+        if value == "$" and opening is None and len(tokens) == 1 and re.match(r"\d", text[token.end():]):
+            continue
+        if opening is None:
+            if value not in pairs:
+                raise ValueError("Unbalanced math delimiter")
+            opening = token
+        elif value == pairs[opening[0]]:
+            spans.append((opening.start(), token.end()))
+            opening = None
+        else:
+            raise ValueError("Mismatched math delimiter")
+    if opening is not None:
+        raise ValueError("Unbalanced math delimiter")
+    for start, end in reversed(spans):
+        text = text[:start] + " " + text[end:]
+    if re.search(r"\\[A-Za-z]+", text) or re.search(r"\b[A-Za-z0-9]+\s*\^\s*(?:\{|[-+]?\d|[A-Za-z])", text):
+        raise ValueError("Unwrapped mathematical expression")
+    if re.search(r"(?<![A-Za-z])(?:[A-Za-zα-ωΑ-Ω]{1,2})_(?:\{[^}]+\}|[A-Za-z0-9]{1,2})(?![A-Za-z0-9])", text):
+        raise ValueError("Unwrapped mathematical subscript")
+
+def chinese_caption(text: str) -> bool:
+    prose = re.sub(r"\\\(.*?\\\)|\\\[.*?\\\]", "", text, flags=re.S)
+    chinese = len(re.findall(r"[\u4e00-\u9fff]", prose))
+    latin = len(re.findall(r"[A-Za-z]", prose))
+    return chinese >= 5 and chinese / max(1, chinese + latin) >= .35 and not re.search(r"(?:[A-Za-z][A-Za-z'-]*\s+){5}[A-Za-z]", prose)
 
 def validate_analysis(value: dict) -> dict:
     result = _Analysis.model_validate(value).model_dump()
     text_values = [result["title"], result["summary"], *result["content"].values()]
     if any(not text.strip() for text in text_values) or any(len(tag) > 80 for tag in result["tags"]):
         raise ValueError("Empty required text or overlong tag")
+    for figure in result["selected_figures"]:
+        if not chinese_caption(figure["caption"]) or not chinese_caption(figure["selection_reason"]):
+            raise ValueError("Figure explanation must be Chinese")
+        text_values.extend((figure["caption"], figure["selection_reason"]))
+    for text in text_values:
+        validate_math_format(text)
     return result
 
 def safe_error_details(exc: Exception) -> dict:
@@ -150,24 +200,29 @@ def parse_json_response(text: str) -> dict:
     return value
 
 def analyze_candidate(candidate: dict, topic_labels: list[str], edition_date: str) -> dict:
-    evidence = {k: candidate.get(k) for k in ("title", "source_url", "source_name", "published_at", "journal", "doi", "evidence_text", "evidence_level", "figures", "company_ids", "section")}
+    evidence = {k: candidate.get(k) for k in ("title", "source_url", "source_name", "published_at", "journal", "doi", "evidence_text", "evidence_level", "figure_candidates", "math_extraction", "company_ids", "section")}
     prompt = """分析下面一条候选资讯，给出可发布的中文简报。先用 summary 一段概括成果/事件。
 输出必须是一个完整、严格合法的 JSON 对象；不要代码围栏、前后说明、注释或省略号。
 使用紧凑单行 JSON。字符串内不要真实换行或未转义的英文双引号；使用中文标点引号。
-不得使用 LaTeX、反斜线或 Markdown 数学公式；物理量使用 Unicode 或中文纯文本，例如 μm、飞秒。
+数学公式必须使用 LaTeX，行内用 \\( ... \\)，独立公式用 \\[ ... \\]；JSON 字符串中每个反斜线必须转义为两个反斜线。
+不要把 PDF 提取缺失的数学符号补猜成公式；保留能够被输入证据确定的表达式，不能确定处明确说明。
 title 不超过80个汉字，summary 不超过150字，每个 content 字段控制在200–350字以内；证据不足可更短。
 tags 最多8项、company_mentions 最多6项；即使 publish=false 也必须返回下述所有字段，数组可为空。
 只返回 JSON：{"title":"中文标题","summary":"150字以内","importance":0到100整数,
 "publish":true或false,"content":{"background":"研究背景/事件背景","approach":"研究方案/事件经过",
 "results":"研究结果/影响，数值必须来自证据","assessment":"优势、不足和证据边界"},"tags":["关键词"],
-"company_mentions":[{"name":"证据中的企业原始名称","evidence_quote":"包含该企业名的原文连续短句"}]}。
+"company_mentions":[{"name":"证据中的企业原始名称","evidence_quote":"包含该企业名的原文连续短句"}],
+"selected_figures":[{"id":"输入候选的真实id","caption":"中文图注，保留图号、子图含义、变量及条件","selection_reason":"该图证明哪项关键研究结果","role":"result"}]}。
 company_mentions 只列文中真实提及的企业（不列学校、期刊、研究机构或人名），名称和引文都必须逐字存在于输入证据。没有则空数组。
 科研资讯优先与用户兴趣相关且有增量的研究。非研究评论、无具体进展或仅目录不应发布。
 重大事件分区只有全国/国际级政策、明显市场冲击、重大公共事件才 publish；日常新闻不充数。
 只有摘要时，approach/results 不得补造实验细节；assessment 必须明确“基于摘要，未取得全文”。
-原图已由程序单独处理，不得自造图片或网址。企业技术性能标明“企业公布”。
+研究论文必须从 figure_candidates 中选择1至6张支撑主要研究结果的关键原图；综合原文图注和引用上下文判断，不能只取前几张或只选装置示意图。
+selected_figures 只能填写输入中存在的候选id，不得输出或编造图片网址。caption必须是准确完整的中文解释，公式使用LaTeX，不可复制整段英文图注。
+selection_reason 说明与正文results中的具体结果关联。没有可靠的结果图时返回空数组，不编造图或假称已看到图像。非研究资讯返回空数组。
+对于kind=pdf_page候选，程序会展示含该图的完整原文页，不得声称已裁出单张图片。企业技术性能标明“企业公布”。
 标题和摘要里不能写“今日发布”，除非日期证据支持。不要将旧事件伪装为新发生。
-""" + json.dumps({"edition_date": edition_date, "interest_topics": topic_labels, "evidence": evidence}, ensure_ascii=False)
+""" + "合法JSON数学字符串示例：" + json.dumps({"example": r"测得 \(\Delta T/T = 0.1\)，其中 \(\tau = 2\,\mathrm{ps}\)。"}, ensure_ascii=False) + "\n" + json.dumps({"edition_date": edition_date, "interest_topics": topic_labels, "evidence": evidence}, ensure_ascii=False)
     run_home = runtime_root() / "generation" / edition_date / uuid.uuid4().hex
     try:
         budget = max(8000, min(12000, int(os.getenv("OPTINFO_GENERATION_MAX_TOKENS", "8000"))))
@@ -178,7 +233,7 @@ company_mentions 只列文中真实提及的企业（不列学校、期刊、研
                 reason = "上次回答达到输出长度上限而未完成。" if retry_reason == "max-tokens" else "上次回答未通过JSON结构校验。"
                 compact_prompt = prompt.replace("每个 content 字段控制在200–350字以内", "每个 content 字段不超过150字")
                 instruction = (reason + "请根据下面相同证据重新独立生成；不要猜测或补全截断字段。"
-                               "只返回严格合法的完整单行JSON，不使用反斜线、LaTeX、英文引号嵌套、代码块。"
+                               "只返回严格合法的完整单行JSON，LaTeX反斜线必须按JSON规则转义，不使用英文引号嵌套或代码块。"
                                "直接整理证据，不做冗长推演；证据不足可更短，以确保输出完整。\n") + compact_prompt
             try:
                 text = _run(instruction, run_home / f"attempt-{attempt + 1}", max_tokens=budget)
@@ -195,7 +250,14 @@ company_mentions 只列文中真实提及的企业（不列学校、期刊、研
             try:
                 value = parse_json_response(text)
                 stage = "schema"
-                return validate_analysis(value)
+                value = validate_analysis(value)
+                allowed_ids = {figure["id"] for figure in candidate.get("figure_candidates", [])}
+                chosen_ids = [figure["id"] for figure in value["selected_figures"]]
+                if len(set(chosen_ids)) != len(chosen_ids) or set(chosen_ids) - allowed_ids:
+                    raise ValueError("Figure selection is not bound to source evidence")
+                if candidate.get("section") == "research" and value["publish"] and not chosen_ids:
+                    raise ValueError("Published research requires original result figures")
+                return value
             except (ValueError, ValidationError) as exc:
                 if attempt:
                     raise StructuredOutputError(stage=stage, exception_type=type(exc).__name__, attempts=2) from None
@@ -210,7 +272,7 @@ company_mentions 只列文中真实提及的企业（不列学校、期刊、研
 async def answer_question(item: dict, messages: list[dict], session_dir: Path | str) -> str:
     # Database is the canonical conversation. Every SDK invocation gets a distinct
     # session id and the complete bounded conversation, avoiding duplicate resumes.
-    safe_item = {k: item.get(k) for k in ("title", "summary", "content", "sources", "source_url", "evidence_level", "evidence_text", "journal", "doi", "published_at")}
+    safe_item = {k: item.get(k) for k in ("title", "summary", "content", "figures", "sources", "source_url", "evidence_level", "evidence_text", "journal", "doi", "published_at")}
     prompt = "请回答这条推送的用户问题；只依据下述推送和历史对话。若缺少原文证据，请明确说明。\n" + json.dumps({"item": safe_item, "conversation": [{"role": m["role"], "content": m["content"]} for m in messages[-30:]]}, ensure_ascii=False)
     return await asyncio.to_thread(_run, prompt, Path(session_dir), None, 4500)
 
