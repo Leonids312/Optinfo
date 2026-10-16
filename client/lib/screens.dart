@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'api.dart';
+import 'cache.dart';
 import 'main.dart' show ink, teal;
 import 'models.dart';
 
@@ -56,19 +59,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Json _bootstrap = {}, _briefing = {};
   List<NewsItem> _items = [];
   List<Company> _companies = [];
-  String _section = '', _journal = '', _date = shanghaiToday();
+  String _section = '', _journal = '';
+  late String _date = widget.api.today;
+  late String _owner = widget.api.cacheOwner;
+  String? _displayedKey;
+  int _bootstrapRequest = 0;
+  final Map<int, (String, String, String, String, bool)> _tabs = {};
+  Timer? _dayTimer;
   final _search = TextEditingController();
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _error = widget.initialError;
-    _initialize();
+    _scheduleDayChange();
+    _load();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _dayTimer?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -77,99 +88,164 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted && !_loading) {
       if (_page == 0) {
-        setState(() => _date = shanghaiToday());
+        setState(() => _date = widget.api.today);
       }
       _load();
     }
   }
 
-  Future<void> _initialize() async {
-    if (!widget.api.connection.configured) return;
-    final cached = await widget.api.connection.cachedBriefing();
-    if (mounted && cached != null) {
-      setState(() {
-        _briefing = cached;
-        _items = objects(cached['items']).map(NewsItem.new).toList();
-        _offline = true;
-      });
-    }
-    await _load();
+  void _scheduleDayChange() {
+    _dayTimer?.cancel();
+    final now = widget.api.clock().toUtc();
+    final shanghai = now.add(const Duration(hours: 8));
+    final nextDay =
+        DateTime.utc(shanghai.year, shanghai.month, shanghai.day + 1)
+            .subtract(const Duration(hours: 8));
+    _dayTimer = Timer(nextDay.difference(now) + const Duration(seconds: 1), () {
+      if (!mounted) return;
+      _load();
+      _scheduleDayChange();
+    });
   }
 
-  Future<void> _load() async {
+  QueryRequest _query() {
+    if (_page == 2 || (_page == 3 && _companyBookmarks)) {
+      return widget.api.query('/api/companies', query: {
+        'q': _search.text.trim(),
+        'bookmarked': _page == 3 ? 'true' : 'false'
+      });
+    }
+    final historicalQuery =
+        _page == 1 && (_search.text.trim().isNotEmpty || _journal.isNotEmpty);
+    return widget.api.query('/api/briefing', query: {
+      'date': _page == 0
+          ? widget.api.today
+          : _page == 1 && !historicalQuery
+              ? _date
+              : '',
+      'q': _page == 0 ? '' : _search.text.trim(),
+      'section': _section,
+      'journal': _page == 1 ? _journal : '',
+      'bookmarked': _page == 3 ? 'true' : 'false',
+    });
+  }
+
+  void _show(QueryRequest query, Json data) {
+    _displayedKey = '${query.owner}:${query.key}';
+    if (query.path == '/api/companies') {
+      _companies = objects(data['items']).map(Company.new).toList();
+      _items = [];
+    } else {
+      _briefing = data;
+      _items = objects(data['items']).map(NewsItem.new).toList();
+      _companies = [];
+    }
+  }
+
+  bool _current(int number, QueryRequest query) {
+    if (!mounted || number != _request || !widget.api.owns(query)) return false;
+    if (_page == 0 && query.query['date'] != widget.api.today) {
+      _load();
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _loadBootstrap({bool force = false}) async {
+    final query = widget.api.query('/api/bootstrap');
+    final number = ++_bootstrapRequest;
+    bool current() =>
+        mounted &&
+        number == _bootstrapRequest &&
+        widget.api.owns(query) &&
+        query.day == widget.api.today;
+    try {
+      final cached = widget.api.peek(query) ?? await widget.api.cached(query);
+      if (!current()) return;
+      if (cached != null) setState(() => _bootstrap = cached.data);
+      if (!force && cached != null && cached.fresh(widget.api.clock())) return;
+      final data = await widget.api.fetch(query);
+      if (current()) setState(() => _bootstrap = data);
+    } catch (_) {
+      // A slow or unavailable catalogue must not block reading cached briefings.
+    }
+  }
+
+  Future<void> _load({bool force = false}) async {
     if (!widget.api.connection.configured) {
       if (mounted) setState(() => _loading = false);
       return;
     }
+    if (_owner != widget.api.cacheOwner) {
+      _owner = widget.api.cacheOwner;
+      _tabs.clear();
+      _section = '';
+      _journal = '';
+      _date = widget.api.today;
+      _search.clear();
+      _companyBookmarks = false;
+      _items = [];
+      _companies = [];
+      _bootstrap = {};
+      _briefing = {};
+      _displayedKey = null;
+    }
     final request = ++_request;
+    final query = _query();
+    final key = '${query.owner}:${query.key}';
+    final memory = widget.api.peek(query);
     setState(() {
-      _loading = true;
+      if (memory != null) {
+        _show(query, memory.data);
+      } else if (_displayedKey != key) {
+        _items = [];
+        _companies = [];
+        _briefing = {};
+        _displayedKey = null;
+      }
+      _loading = memory == null && _displayedKey != key;
+      _offline = false;
       _error = null;
     });
+    unawaited(_loadBootstrap(force: force));
     try {
-      // Bootstrap is fetched with each refresh so preferences reflect other devices.
-      final bootstrap = await widget.api.bootstrap();
-      Json data;
-      final companies = _page == 2 || (_page == 3 && _companyBookmarks);
-      if (companies) {
-        data = await widget.api.call(
-          '/api/companies',
-          query: {
-            'q': _search.text.trim(),
-            'bookmarked': _page == 3 ? 'true' : 'false',
-          },
-        );
-      } else {
-        final historicalQuery = _page == 1 &&
-            (_search.text.trim().isNotEmpty || _journal.isNotEmpty);
-        data = await widget.api.briefing({
-          'date': _page == 0
-              ? shanghaiToday()
-              : _page == 1 && !historicalQuery
-                  ? _date
-                  : '',
-          'q': _page == 0 ? '' : _search.text.trim(),
-          'section': _section,
-          'journal': _page == 1 ? _journal : '',
-          'bookmarked': _page == 3 ? 'true' : 'false',
+      final cached = memory ?? await widget.api.cached(query);
+      if (!_current(request, query)) return;
+      if (cached != null) {
+        setState(() {
+          _show(query, cached.data);
+          _loading = false;
         });
+        if (!force && cached.fresh(widget.api.clock())) return;
       }
-      if (!mounted || request != _request) return;
+      final data = await widget.api.fetch(query);
+      if (!_current(request, query)) return;
       setState(() {
-        _bootstrap = bootstrap;
+        _show(query, data);
         _offline = false;
-        if (companies) {
-          _companies = objects(data['items']).map(Company.new).toList();
-        } else {
-          _briefing = data;
-          _items = objects(data['items']).map(NewsItem.new).toList();
-        }
       });
-      if (_page == 0 && _section.isEmpty) {
-        await widget.api.connection.cacheBriefing(data);
-      }
     } catch (error) {
-      if (!mounted || request != _request) return;
+      if (!_current(request, query)) return;
       setState(() {
         _error = errorText(error);
-        _offline = _items.isNotEmpty || _companies.isNotEmpty;
+        _offline = _displayedKey == key;
       });
     } finally {
-      if (mounted && request == _request) setState(() => _loading = false);
+      if (_current(request, query)) setState(() => _loading = false);
     }
   }
 
   void _navigate(int page) {
     if (_page == page) return;
+    _tabs[_page] = (_section, _journal, _date, _search.text, _companyBookmarks);
+    final saved = _tabs[page];
     setState(() {
       _page = page;
-      _section = '';
-      _journal = '';
-      _search.clear();
-      _items = [];
-      _companies = [];
-      _offline = false;
-      _error = null;
+      _section = saved?.$1 ?? '';
+      _journal = saved?.$2 ?? '';
+      _date = page == 0 ? widget.api.today : saved?.$3 ?? widget.api.today;
+      _search.text = saved?.$4 ?? '';
+      _companyBookmarks = saved?.$5 ?? false;
     });
     _load();
   }
@@ -185,6 +261,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _companies = [];
         _bootstrap = {};
         _briefing = {};
+        _displayedKey = null;
         _offline = false;
       });
       await _load();
@@ -204,7 +281,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       constraints: const BoxConstraints(maxWidth: 800),
       builder: (_) => InterestsSheet(api: widget.api, bootstrap: _bootstrap),
     );
-    if (saved == true) await _load();
+    if (saved == true) {
+      await widget.api.cache
+          .invalidate(widget.api.cacheOwner, '/api/bootstrap');
+      await _loadBootstrap(force: true);
+    }
   }
 
   Future<void> _openItem(NewsItem item) async {
@@ -229,7 +310,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final mark = !item.bookmarked;
     try {
       await widget.api.bookmark(item.id, mark);
-      if (mounted) setState(() => item.raw['bookmarked'] = mark);
+      if (mounted) {
+        setState(() => item.raw['bookmarked'] = mark);
+        _load();
+      }
     } catch (error) {
       if (mounted) toast(context, errorText(error));
     }
@@ -240,7 +324,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       initialDate: DateTime.tryParse(_date) ?? DateTime.now(),
       firstDate: DateTime(2020),
-      lastDate: DateTime.parse(shanghaiToday()),
+      lastDate: DateTime.parse(widget.api.today),
     );
     if (selected != null) {
       setState(() {
@@ -301,7 +385,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           tooltip: '关注领域',
                         ),
                         IconButton(
-                          onPressed: _loading ? null : _load,
+                          onPressed: _loading ? null : () => _load(force: true),
                           icon: const Icon(Icons.refresh_rounded),
                           tooltip: '刷新内容',
                         ),
@@ -319,8 +403,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     const SizedBox(height: 2),
                   Expanded(
                     child: RefreshIndicator(
-                      onRefresh: _load,
+                      onRefresh: () => _load(force: true),
                       child: ListView(
+                        key: PageStorageKey('optinfo-feed-$_page'),
                         padding: EdgeInsets.fromLTRB(
                           wide ? 36 : 20,
                           24,
@@ -509,7 +594,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       children: [
         Text(
           _page == 0
-              ? '${shanghaiToday().replaceAll('-', ' / ')}   ·   DAILY BRIEF'
+              ? '${widget.api.today.replaceAll('-', ' / ')}   ·   DAILY BRIEF'
               : ['', 'ARCHIVE', 'COMPANY ATLAS', 'YOUR COLLECTION'][_page],
           style: const TextStyle(
             fontSize: 11,
@@ -1179,7 +1264,7 @@ class _ConnectionDialogState extends State<ConnectionDialog> {
                   onPressed: () => showLicensePage(
                       context: context,
                       applicationName: 'Optinfo',
-                      applicationVersion: '0.1.0'),
+                      applicationVersion: '0.1.1'),
                   child: const Text('开源许可', style: TextStyle(fontSize: 11)),
                 ),
                 if (_error != null)
@@ -1222,12 +1307,38 @@ class ArticleScreen extends StatefulWidget {
 
 class _ArticleScreenState extends State<ArticleScreen> {
   late NewsItem _item = widget.initial;
+  final _articleScroll = ScrollController();
+  final _exploreScroll = ScrollController();
+  final _chatPanelKey = GlobalKey<_ChatPanelState>();
+  final _termsKey = GlobalKey();
+  bool _exploreOpen = false;
   bool _saving = false;
   String? _error;
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _articleScroll.dispose();
+    _exploreScroll.dispose();
+    super.dispose();
+  }
+
+  void _closeExplore() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _exploreOpen = false);
+  }
+
+  void _showTerms() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final terms = _termsKey.currentContext;
+    if (terms != null) {
+      Scrollable.ensureVisible(terms,
+          duration: const Duration(milliseconds: 220));
+    }
   }
 
   Future<void> _reload() async {
@@ -1260,62 +1371,228 @@ class _ArticleScreenState extends State<ArticleScreen> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 1100;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          sectionNames[_item.section] ?? '资讯详情',
-          style: const TextStyle(fontSize: 15),
-        ),
-        actions: [
-          IconButton(
-            onPressed: _saving ? null : _bookmark,
-            tooltip: _item.bookmarked ? '取消收藏' : '收藏资讯',
-            icon: Icon(
-              _item.bookmarked
-                  ? Icons.bookmark_rounded
-                  : Icons.bookmark_border_rounded,
-              color: teal,
-            ),
+    return PopScope(
+      canPop: wide || !_exploreOpen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && !wide && _exploreOpen) _closeExplore();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            sectionNames[_item.section] ?? '资讯详情',
+            style: const TextStyle(fontSize: 15),
           ),
-          if (_item.sourceUrl.isNotEmpty)
+          actions: [
             IconButton(
-              onPressed: () => openLink(context, _item.sourceUrl),
-              icon: const Icon(Icons.open_in_new_rounded),
-              tooltip: '阅读原文',
+              onPressed: _saving ? null : _bookmark,
+              tooltip: _item.bookmarked ? '取消收藏' : '收藏资讯',
+              icon: Icon(
+                _item.bookmarked
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                color: teal,
+              ),
             ),
-          const SizedBox(width: 12),
-        ],
-      ),
-      body: SelectionArea(
-        child: SingleChildScrollView(
+            if (_item.sourceUrl.isNotEmpty)
+              IconButton(
+                onPressed: () => openLink(context, _item.sourceUrl),
+                icon: const Icon(Icons.open_in_new_rounded),
+                tooltip: '阅读原文',
+              ),
+            const SizedBox(width: 12),
+          ],
+        ),
+        bottomNavigationBar: !wide && !_exploreOpen
+            ? SafeArea(
+                top: false,
+                minimum: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+                child: FilledButton.icon(
+                  key: const ValueKey('article-explore-entry'),
+                  onPressed: () => setState(() => _exploreOpen = true),
+                  icon: const Icon(Icons.auto_awesome_outlined, size: 19),
+                  label: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text('继续探究 / 词条'),
+                  ),
+                ),
+              )
+            : null,
+        body: SafeArea(
+          top: false,
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1250),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  wide ? 36 : 20,
-                  24,
-                  wide ? 36 : 20,
-                  60,
-                ),
-                child: wide
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(flex: 7, child: _article()),
-                          const SizedBox(width: 36),
-                          Expanded(flex: 4, child: _aside()),
-                        ],
-                      )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _article(),
-                          const SizedBox(height: 32),
-                          _aside(),
-                        ],
+              child: LayoutBuilder(builder: (context, constraints) {
+                final overlayOpen = !wide && _exploreOpen;
+                final compactPanel = constraints.maxHeight < 360;
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Positioned.fill(
+                      right: wide ? 414 : 0,
+                      child: ExcludeSemantics(
+                        excluding: overlayOpen,
+                        child: FocusScope(
+                          canRequestFocus: !overlayOpen,
+                          child: IgnorePointer(
+                            ignoring: overlayOpen,
+                            child: Scrollbar(
+                              controller: _articleScroll,
+                              thumbVisibility: wide,
+                              child: SingleChildScrollView(
+                                key: const ValueKey('article-scroll'),
+                                controller: _articleScroll,
+                                primary: false,
+                                padding: EdgeInsets.fromLTRB(
+                                    wide ? 36 : 20, 24, wide ? 18 : 20, 60),
+                                child: SelectionArea(child: _article()),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-              ),
+                    ),
+                    if (overlayOpen)
+                      ModalBarrier(
+                        color: Colors.black26,
+                        dismissible: true,
+                        onDismiss: _closeExplore,
+                        semanticsLabel: '关闭探究与词条',
+                      ),
+                    // This is one persistent subtree in every layout. Hiding the
+                    // mobile sheet never recreates ChatPanel or loses its draft.
+                    Positioned(
+                      key: const ValueKey('article-explore-position'),
+                      left: wide ? null : 0,
+                      right: wide ? 24 : 0,
+                      top: wide ? 16 : null,
+                      bottom: wide ? 16 : 0,
+                      width: wide ? 366 : null,
+                      height: wide ? null : constraints.maxHeight * .96,
+                      child: Offstage(
+                        offstage: !wide && !_exploreOpen,
+                        child: FocusScope(
+                          canRequestFocus: wide || _exploreOpen,
+                          child: Semantics(
+                            container: true,
+                            explicitChildNodes: true,
+                            scopesRoute: !wide,
+                            namesRoute: !wide,
+                            label: '探究与词条',
+                            child: Material(
+                              key: const ValueKey('article-explore-panel'),
+                              color: const Color(0xFFF6F8F4),
+                              elevation: wide ? 0 : 12,
+                              clipBehavior: Clip.antiAlias,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Column(
+                                children: [
+                                  Padding(
+                                    padding: EdgeInsets.fromLTRB(
+                                        18, wide ? 16 : 8, 8, 8),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '探究与词条',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleSmall,
+                                          ),
+                                        ),
+                                        if (compactPanel) ...[
+                                          IconButton(
+                                            onPressed: () => _chatPanelKey
+                                                .currentState
+                                                ?.revealComposer(),
+                                            tooltip: '提问',
+                                            icon: const Icon(
+                                                Icons.chat_bubble_outline,
+                                                size: 18),
+                                          ),
+                                          if (_item.companyIds.isNotEmpty ||
+                                              _item.tags.isNotEmpty)
+                                            IconButton(
+                                              onPressed: _showTerms,
+                                              tooltip: '词条',
+                                              icon: const Icon(
+                                                  Icons.local_offer_outlined,
+                                                  size: 18),
+                                            ),
+                                        ],
+                                        if (!wide)
+                                          IconButton(
+                                            key: const ValueKey(
+                                                'article-explore-close'),
+                                            onPressed: _closeExplore,
+                                            tooltip: '收起探究与词条',
+                                            icon: const Icon(
+                                                Icons.keyboard_arrow_down),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (!compactPanel)
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                          12, 0, 12, 4),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Wrap(
+                                          spacing: 8,
+                                          children: [
+                                            TextButton.icon(
+                                              onPressed: () => _chatPanelKey
+                                                  .currentState
+                                                  ?.revealComposer(),
+                                              icon: const Icon(
+                                                  Icons.chat_bubble_outline,
+                                                  size: 16),
+                                              label: const Text('提问'),
+                                            ),
+                                            if (_item.companyIds.isNotEmpty ||
+                                                _item.tags.isNotEmpty)
+                                              TextButton.icon(
+                                                onPressed: _showTerms,
+                                                icon: const Icon(
+                                                    Icons.local_offer_outlined,
+                                                    size: 16),
+                                                label: const Text('词条'),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  Expanded(
+                                    child: Scrollbar(
+                                      controller: _exploreScroll,
+                                      thumbVisibility: wide,
+                                      child: SingleChildScrollView(
+                                        key: const ValueKey(
+                                            'article-explore-scroll'),
+                                        controller: _exploreScroll,
+                                        primary: false,
+                                        keyboardDismissBehavior:
+                                            ScrollViewKeyboardDismissBehavior
+                                                .onDrag,
+                                        padding: const EdgeInsets.fromLTRB(
+                                            12, 4, 12, 24),
+                                        child: SelectionArea(child: _aside()),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }),
             ),
           ),
         ),
@@ -1476,7 +1753,8 @@ class _ArticleScreenState extends State<ArticleScreen> {
   Widget _aside() => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ChatPanel(api: widget.api, itemId: _item.id),
+          ChatPanel(key: _chatPanelKey, api: widget.api, itemId: _item.id),
+          SizedBox(key: _termsKey),
           if (_item.companyIds.isNotEmpty) ...[
             const SizedBox(height: 28),
             Text('本文提到的企业', style: Theme.of(context).textTheme.titleMedium),
@@ -1486,6 +1764,8 @@ class _ArticleScreenState extends State<ArticleScreen> {
           ],
           if (_item.tags.isNotEmpty) ...[
             const SizedBox(height: 24),
+            Text('相关词条', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -1630,6 +1910,7 @@ class ChatPanel extends StatefulWidget {
 
 class _ChatPanelState extends State<ChatPanel> {
   final _question = TextEditingController();
+  final _composerKey = GlobalKey();
   Json _chat = {};
   bool _loading = true, _sending = false;
   String? _error;
@@ -1684,6 +1965,14 @@ class _ChatPanelState extends State<ChatPanel> {
       if (mounted) setState(() => _error = errorText(error));
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void revealComposer() {
+    final composer = _composerKey.currentContext;
+    if (composer != null) {
+      Scrollable.ensureVisible(composer,
+          alignment: .2, duration: const Duration(milliseconds: 220));
     }
   }
 
@@ -1809,6 +2098,7 @@ class _ChatPanelState extends State<ChatPanel> {
               const SizedBox(height: 14),
             ],
             TextField(
+              key: _composerKey,
               controller: _question,
               minLines: 2,
               maxLines: 6,

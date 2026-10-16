@@ -1,13 +1,14 @@
 name: optinfo
 description: Private optics, semiconductor and world briefing reader.
 publish_to: none
-version: 0.1.0+1
+version: 0.1.1+2
 environment:
   sdk: '>=3.6.0 <4.0.0'
 dependencies:
   flutter:
     sdk: flutter
   http: ^1.4.0
+  crypto: ^3.0.7
   shared_preferences: ^2.5.3
   flutter_secure_storage: ^9.2.4
   url_launcher: ^6.3.1

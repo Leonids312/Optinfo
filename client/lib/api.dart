@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
+import 'cache.dart';
 
 class ApiFailure implements Exception {
   final String message;
@@ -53,32 +55,121 @@ class ConnectionStore {
     await _vault.write(key: 'device_token', value: accessToken.trim());
     if (base != normalized || token != accessToken.trim()) {
       await prefs.remove('briefing_cache');
+      await prefs.remove(LocalQueryCache.storageKey);
     }
     await prefs.setString('server_base', normalized);
     base = normalized;
     token = accessToken.trim();
   }
-
-  Future<Json?> cachedBriefing() async {
-    final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getString('briefing_cache');
-    if (value == null) return null;
-    try {
-      return object(jsonDecode(value));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> cacheBriefing(Json value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('briefing_cache', jsonEncode(value));
-  }
 }
 
 class Api {
   final ConnectionStore connection;
-  Api(this.connection);
+  final LocalQueryCache cache;
+  final DateTime Function() clock;
+  final Map<String, Future<Json>> _inflight = {};
+  final List<_BookmarkChange> _changes = [];
+  final Map<int, int> _activeRevisions = {};
+  int _mutation = 0;
+  Api(this.connection, {LocalQueryCache? cache, DateTime Function()? clock})
+      : clock = clock ?? DateTime.now,
+        cache = cache ?? LocalQueryCache(clock: clock);
+
+  String get today => clock()
+      .toUtc()
+      .add(const Duration(hours: 8))
+      .toIso8601String()
+      .substring(0, 10);
+  String get cacheOwner => sha256
+      .convert(utf8.encode('${connection.base}\u0000${connection.token}'))
+      .toString();
+  QueryRequest query(String path,
+          {Map<String, String> query = const {}, String? day}) =>
+      QueryRequest(cacheOwner, path, query,
+          day ?? (path == '/api/bootstrap' ? today : query['date'] ?? ''));
+  bool owns(QueryRequest request) =>
+      connection.configured && cacheOwner == request.owner;
+  CachedQuery? peek(QueryRequest request) =>
+      owns(request) ? cache.peek(request) : null;
+
+  Future<CachedQuery?> cached(QueryRequest request) async {
+    if (!owns(request)) return null;
+    await cache.ready(request.owner);
+    return peek(request);
+  }
+
+  Future<Json> fetch(QueryRequest request) {
+    final key = '${request.owner}:${request.key}';
+    return _inflight.putIfAbsent(
+        key,
+        () => _fetch(request).whenComplete(() {
+              _inflight.remove(key);
+            }));
+  }
+
+  Future<Json> _fetch(QueryRequest request) async {
+    if (!request.allowed) throw ApiFailure('该接口不支持本地资讯缓存。');
+    if (!owns(request)) throw ApiFailure('连接已更改，请重新加载。');
+    await cache.ready(request.owner);
+    if (!owns(request)) throw ApiFailure('连接已更改，请重新加载。');
+    final revision = _mutation;
+    _activeRevisions.update(revision, (count) => count + 1, ifAbsent: () => 1);
+    try {
+      return await _fetchAt(request, revision);
+    } finally {
+      final count = _activeRevisions[revision]!;
+      if (count == 1) {
+        _activeRevisions.remove(revision);
+      } else {
+        _activeRevisions[revision] = count - 1;
+      }
+      _pruneChanges();
+    }
+  }
+
+  void _pruneChanges() {
+    if (_activeRevisions.isEmpty) {
+      _changes.clear();
+      return;
+    }
+    final oldest = _activeRevisions.keys.reduce((a, b) => a < b ? a : b);
+    _changes.removeWhere((change) => change.version <= oldest);
+  }
+
+  Future<Json> _fetchAt(QueryRequest request, int revision) async {
+    final data = await call(request.path, query: request.query);
+    if (!owns(request)) throw ApiFailure('连接已更改，请重新加载。');
+    final result = copyJson(data);
+    final changes = _changes
+        .where((c) =>
+            c.owner == request.owner &&
+            c.version > revision &&
+            request.path == (c.company ? '/api/companies' : '/api/briefing'))
+        .toList();
+    if (request.query['bookmarked'] == 'true' && changes.isNotEmpty) {
+      // Membership and search filters must be re-evaluated by the server after
+      // a concurrent mutation, not guessed from an outdated favorites response.
+      return _fetch(request);
+    }
+    // An older GET may arrive after a successful bookmark PUT. Reconcile it
+    // before either rendering or persisting; later GETs remain authoritative.
+    for (final change in changes) {
+      final path = change.company ? '/api/companies' : '/api/briefing';
+      if (request.path != path) continue;
+      final rows = objects(result['items']);
+      for (final row in rows) {
+        if (string(row['id']) == change.id) row['bookmarked'] = change.marked;
+      }
+      if (request.query['bookmarked'] == 'true' && !change.marked) {
+        rows.removeWhere((row) => string(row['id']) == change.id);
+      }
+      result['items'] = rows;
+    }
+    await cache.put(request, result);
+    if (!owns(request)) throw ApiFailure('连接已更改，请重新加载。');
+    return peek(request)?.data ?? result;
+  }
+
   Future<Json> call(
     String path, {
     String method = 'GET',
@@ -148,10 +239,25 @@ class Api {
   Future<NewsItem> item(String id) async =>
       NewsItem(await call('/api/items/${Uri.encodeComponent(id)}'));
   Future<void> bookmark(String id, bool marked, {bool company = false}) async {
+    final owner = cacheOwner;
     await call(
       '/api/${company ? 'companies' : 'items'}/${Uri.encodeComponent(id)}/bookmark',
       method: 'PUT',
       body: {'bookmarked': marked},
     );
+    if (owner != cacheOwner) return;
+    _changes.removeWhere((change) =>
+        change.owner != owner ||
+        (change.id == id && change.company == company));
+    _changes.add(_BookmarkChange(++_mutation, owner, id, marked, company));
+    _pruneChanges();
+    await cache.bookmark(owner, id, marked, company: company);
   }
+}
+
+class _BookmarkChange {
+  final int version;
+  final String owner, id;
+  final bool marked, company;
+  _BookmarkChange(this.version, this.owner, this.id, this.marked, this.company);
 }

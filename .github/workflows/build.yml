@@ -64,6 +64,13 @@ jobs:
       - name: Build Android
         if: runner.os == 'Linux'
         run: flutter build apk --release
+      - name: Verify Android release signature
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          APK_SIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APK_SIGNER"
+          "$APK_SIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
       - name: Build Windows
         if: runner.os == 'Windows'
         run: flutter build windows --release
@@ -81,3 +88,68 @@ jobs:
         with:
           name: Optinfo-Android
           path: client/build/app/outputs/flutter-apk/app-release.apk
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [backend, client]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Optinfo-Android
+          path: incoming/android
+      - uses: actions/download-artifact@v4
+        with:
+          name: Optinfo-Windows-x64
+          path: incoming/windows
+      - name: Prepare versioned release assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, shutil, subprocess
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          assert re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', tag), 'Invalid release tag'
+          match = re.search(r'^version:\s*(\S+)', Path('client/pubspec.yaml').read_text(), re.M)
+          assert match and match.group(1).split('+')[0] == tag[1:], 'Tag must match client version'
+          notes = Path('docs/releases') / (tag + '.md')
+          assert notes.is_file(), 'Versioned release notes are required'
+          out = Path('release-assets')
+          out.mkdir(exist_ok=True)
+          files = []
+          for source, name in [
+              ('incoming/android/app-release.apk', f'Optinfo-Android-{tag}.apk'),
+              ('incoming/windows/Optinfo-Windows-x64.zip', f'Optinfo-Windows-x64-{tag}.zip'),
+          ]:
+              target = out / name
+              shutil.copyfile(source, target)
+              files.append(target)
+          (out / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in files))
+          (out / 'BUILD_INFO.json').write_text(json.dumps({
+              'version': match.group(1),
+              'source_commit': os.environ['GITHUB_SHA'],
+              'client_tree': subprocess.check_output(['git', 'rev-parse', 'HEAD:client'], text=True).strip(),
+              'build_run': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              'flutter_version': '3.47.7',
+              'android_signature_verified': True,
+          }, indent=2) + '\n')
+          PY
+      - name: Publish complete GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          notes="docs/releases/${RELEASE_TAG}.md"
+          if gh release view "$RELEASE_TAG" --json isDraft > existing-release.json 2>/dev/null; then
+            if [ "$(python3 -c "import json; print(json.load(open('existing-release.json'))['isDraft'])")" != "True" ]; then
+              echo "Release is already published; leaving published assets unchanged."
+              exit 0
+            fi
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --verify-tag --draft --title "Optinfo ${RELEASE_TAG}" --notes-file "$notes"
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false --latest --title "Optinfo ${RELEASE_TAG}" --notes-file "$notes"

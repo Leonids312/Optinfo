@@ -148,6 +148,9 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
+    // Returning to today's fresh cache does not need another network request.
+    await tester.tap(find.byTooltip('刷新内容'));
+    await tester.pumpAndSettle();
     expect(api.queries.last['date'], shanghaiToday());
     expect(tester.takeException(), isNull);
   });
