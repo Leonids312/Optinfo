@@ -90,7 +90,7 @@ def sanitize_analysis(candidate: dict, analysis: dict, edition_date: str) -> dic
             "doi": candidate.get("doi", ""), "journal": candidate.get("journal", ""), "company_ids": candidate.get("company_ids", []),
             "tags": [str(t)[:80] for t in analysis.get("tags", [])[:8]] if isinstance(analysis.get("tags"), list) else [],
             "importance": importance, "content": clean_content, "figures": figures,
-            "content_revision": 2, "analysis_status": "complete",
+            "content_revision": 2, "analysis_status": "complete", "math_status": "complete",
             "math_extraction": candidate.get("math_extraction", ""),
             "sources": [{"title": candidate["title"], "url": candidate["source_url"]}] + ([{"title": "原文正文与图表", "url": candidate["evidence_url"]}] if candidate.get("evidence_url") and candidate["evidence_url"] != candidate["source_url"] else []),
             "evidence_level": candidate["evidence_level"], "evidence_text": candidate.get("evidence_text", ""), "bookmarked": False}
@@ -205,7 +205,7 @@ def repair_papers(db, topic_ids: list[str], *, item_ids: set[str] | None = None,
         if item_ids is not None and item_id not in item_ids:
             continue
         original = db.get_item(item_id)
-        if not force and original.get("content_revision", 0) >= 2 and original.get("analysis_status") == "complete":
+        if not force and original.get("content_revision", 0) >= 2 and original.get("analysis_status") in {"complete", "pending_math"}:
             continue
         if len(result) >= max(1, min(limit, 50)):
             break
@@ -222,7 +222,7 @@ def repair_papers(db, topic_ids: list[str], *, item_ids: set[str] | None = None,
             repaired = sanitize_analysis(candidate, analysis, original["briefing_date"])
             if repaired is None:
                 raise EvidencePending("pending_analysis")
-            patch = {key: repaired[key] for key in ("title", "summary", "content", "figures", "sources", "evidence_level", "evidence_text", "content_revision", "analysis_status", "math_extraction")}
+            patch = {key: repaired[key] for key in ("title", "summary", "content", "figures", "sources", "evidence_level", "evidence_text", "content_revision", "analysis_status", "math_extraction", "math_status")}
             patch.update(repair_reason="", repaired_at=at)
             snapshots = db.repair_item_content(item_id, patch)
             result.append({"item": item_id, "status": "repaired", "snapshots": snapshots, "figures": len(patch["figures"])})

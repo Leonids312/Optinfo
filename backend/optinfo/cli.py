@@ -56,7 +56,7 @@ def cleanup(db: Database, settings: Settings) -> int:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Optinfo daily and major-event jobs")
-    parser.add_argument("command", choices=["generate", "major-events", "cleanup", "check", "collect", "repair-papers"])
+    parser.add_argument("command", choices=["generate", "major-events", "cleanup", "check", "collect", "repair-papers", "repair-math-only"])
     parser.add_argument("--date", default=now_shanghai().date().isoformat())
     parser.add_argument("--item-id", action="append", help="Existing paper id to repair; repeat for multiple papers")
     parser.add_argument("--limit", type=int, default=20, help="Maximum existing papers to repair (1–50)")
@@ -78,6 +78,10 @@ def main(argv=None) -> int:
         print(json.dumps({"count": len(items), "sources": diagnostics, "titles": [{"title": i["title"], "section": i["section"], "url": i["source_url"], "published_at": i["published_at"]} for i in items]}, ensure_ascii=False))
         return 0
     with generation_lock(settings.db_path.parent / "generation.lock"):
+        if args.command == "repair-math-only":
+            from .math_repair import repair_math_only
+            print(json.dumps(repair_math_only(db, item_ids=set(args.item_id) if args.item_id else None, limit=args.limit), ensure_ascii=False))
+            return 0
         if args.command == "repair-papers":
             from .pipeline import repair_papers
             result = repair_papers(db, db.preferences_for_date(day, DEFAULT_TOPIC_IDS),

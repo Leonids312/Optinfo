@@ -166,7 +166,7 @@ class Database:
         snapshot. The allowlist excludes identity, ranking, bookmarks and chats.
         """
         allowed = {"title", "summary", "content", "figures", "sources", "evidence_level", "evidence_text",
-                   "content_revision", "analysis_status", "repair_reason", "repaired_at", "math_extraction"}
+                   "content_revision", "analysis_status", "repair_reason", "repaired_at", "math_extraction", "math_status"}
         if not patch or set(patch) - allowed:
             raise ValueError("Invalid evidence repair fields")
         with self.connection() as conn:
@@ -182,6 +182,45 @@ class Database:
                 snapshot = json.loads(row["data_json"])
                 snapshot.update(patch)
                 conn.execute("UPDATE edition_items SET data_json=? WHERE date=? AND item_id=?", (_json(snapshot), row["date"], item_id))
+        return len(rows)
+
+    def item_versions(self, item_id: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute("SELECT data_json FROM items WHERE id=? UNION ALL SELECT data_json FROM edition_items WHERE item_id=?", (item_id, item_id)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def repair_item_math(self, item_id: str, replacements: dict[str, str], *, status: str) -> int:
+        """Format each snapshot's own wording, without copying newer facts back."""
+        from .harness import validate_delimiter_only_repair
+        if status not in {"complete", "pending"}:
+            raise ValueError("Invalid math repair state")
+        for original, repaired in replacements.items():
+            if validate_delimiter_only_repair(original, repaired) != repaired:
+                raise ValueError("Math repair is not canonical")
+
+        def transform(value):
+            for key in ("title", "summary"):
+                value[key] = replacements.get(value.get(key, ""), value.get(key, ""))
+            value["content"] = {key: replacements.get(text, text) for key, text in value.get("content", {}).items()}
+            for figure in value.get("figures", []):
+                for key in ("caption", "selection_reason"):
+                    if key in figure:
+                        figure[key] = replacements.get(figure[key], figure[key])
+            value["math_status"] = status
+            if value.get("analysis_status") in {"complete", "pending_math"}:
+                value["analysis_status"] = "complete" if status == "complete" else "pending_math"
+            value["repaired_at"] = now_shanghai().isoformat()
+            return value
+
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT data_json FROM items WHERE id=?", (item_id,)).fetchone()
+            if row is None:
+                raise KeyError(item_id)
+            conn.execute("UPDATE items SET data_json=?,updated_at=? WHERE id=?", (_json(transform(json.loads(row[0]))), now_shanghai().isoformat(), item_id))
+            rows = conn.execute("SELECT date,data_json FROM edition_items WHERE item_id=?", (item_id,)).fetchall()
+            for row in rows:
+                conn.execute("UPDATE edition_items SET data_json=? WHERE date=? AND item_id=?", (_json(transform(json.loads(row["data_json"]))), row["date"], item_id))
         return len(rows)
 
     def available_dates(self) -> list[str]:
