@@ -20,7 +20,7 @@ def test_pipeline_cli_edition_and_api_contract(tmp_path, monkeypatch):
     raw = candidate("Ultrafast research test fixture", "https://example.org/paper", "Test fixture", "research", "2026-10-15T10:00:00+00:00", "Evidence for a test fixture. " * 20, journal="Nature Photonics")
     raw.update(evidence_level="fulltext", figure_candidates=[{"id": "fig-test", "url": "https://example.org/figure.png", "source_url": raw["source_url"], "original_caption": "Figure 5. Test result.", "kind": "original_image"}])
     monkeypatch.setattr(pipeline, "materialize_figure", lambda *args: "/api/media/" + "a" * 64 + ".png")
-    monkeypatch.setattr(pipeline, "collect", lambda _: ([raw], [{"source": "test-fixture", "status": "ok", "count": 1}]))
+    monkeypatch.setattr(pipeline, "collect", lambda _, **kwargs: ([raw], [{"source": "test-fixture", "status": "ok", "count": 1}]))
     monkeypatch.setattr(pipeline, "enrich", lambda value: value)
     calls = []
 
@@ -65,7 +65,7 @@ def test_cli_partial_retry_keeps_successes_without_rebilling(tmp_path, monkeypat
     monkeypatch.setattr(cli, "now_shanghai", lambda: now)
     calls = []
 
-    def generate(day, topics, major_only=False, exclude_ids=None, retry_ids=None):
+    def generate(day, topics, major_only=False, exclude_ids=None, retry_ids=None, **kwargs):
         calls.append((set(exclude_ids or []), retry_ids))
         index = len(calls)
         return {"items": [{"id": f"success-{index}", "title": f"成功条目{index}", "section": "research", "importance": 90 - index}],
@@ -87,14 +87,14 @@ def test_cli_partial_retry_keeps_successes_without_rebilling(tmp_path, monkeypat
     assert db.get_item("success-1")["bookmarked"] is True
 
 
-def test_hourly_events_do_not_rebill_filtered_candidates_but_reset_next_day(tmp_path, monkeypatch):
+def test_hourly_events_do_not_rebill_filtered_candidates_across_days(tmp_path, monkeypatch):
     settings = Settings(tmp_path / "data.db", tmp_path / "chats", "test")
     now = datetime(2026, 10, 16, 4, tzinfo=SHANGHAI)
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: settings))
     monkeypatch.setattr(cli, "now_shanghai", lambda: now)
     calls = []
 
-    def generate(day, topics, major_only=False, exclude_ids=None):
+    def generate(day, topics, major_only=False, exclude_ids=None, **kwargs):
         calls.append((day, set(exclude_ids or [])))
         return {"items": [], "companies": [], "generated_at": now.isoformat(), "diagnostics": [],
                 "status": "ready", "reviewed_ids": ["low-importance"]}
@@ -103,4 +103,4 @@ def test_hourly_events_do_not_rebill_filtered_candidates_but_reset_next_day(tmp_
     assert cli.main(["major-events", "--date", "2026-10-16"]) == 0
     assert cli.main(["major-events", "--date", "2026-10-16"]) == 0
     assert cli.main(["major-events", "--date", "2026-10-17"]) == 0
-    assert calls == [("2026-10-16", set()), ("2026-10-16", {"low-importance"}), ("2026-10-17", set())]
+    assert calls == [("2026-10-16", set()), ("2026-10-16", {"low-importance"}), ("2026-10-17", {"low-importance"})]

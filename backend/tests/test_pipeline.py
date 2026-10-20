@@ -66,9 +66,9 @@ def test_new_company_requires_exact_evidence():
 
 def test_model_failure_produces_retryable_partial(monkeypatch):
     one, two = sample(), sample()
-    two["id"], two["title"] = "second", "Pump probe dynamics"
+    two["id"], two["title"], two["source_url"] = "second", "Pump probe dynamics", "https://example.org/paper-two"
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
-    monkeypatch.setattr(pipeline, "collect", lambda day: ([one, two], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([one, two], [{"source": "test", "status": "ok"}]))
     monkeypatch.setattr(pipeline, "enrich", lambda item: item)
     def run(item, *args):
         if item["id"] == "second":
@@ -82,7 +82,7 @@ def test_model_failure_produces_retryable_partial(monkeypatch):
 
 def test_no_published_items_still_retains_filtered_review_after_model_failure(monkeypatch):
     filtered, failed = sample("world"), sample("world")
-    failed["id"], failed["title"] = "failed", "One unavailable model result"
+    failed["id"], failed["title"], failed["source_url"] = "failed", "One unavailable model result", "https://example.org/failed"
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
     monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([filtered, failed], [{"source": "test", "status": "ok"}]))
     monkeypatch.setattr(pipeline, "enrich", lambda value: value)
@@ -99,7 +99,7 @@ def test_no_published_items_still_retains_filtered_review_after_model_failure(mo
 
 def test_all_source_failure_has_distinct_safe_error(monkeypatch):
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
-    monkeypatch.setattr(pipeline, "collect", lambda day: ([], [{"source": "test", "status": "failed", "error": "TimeoutError"}]))
+    monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([], [{"source": "test", "status": "failed", "error": "TimeoutError"}]))
     with pytest.raises(pipeline.SourceCollectionUnavailable) as raised:
         pipeline.generate_edition("2026-10-16", [])
     assert harness.safe_error_details(raised.value) == {"error": "SourceCollectionUnavailable", "stage": "collect"}
@@ -108,7 +108,7 @@ def test_all_source_failure_has_distinct_safe_error(monkeypatch):
 def test_known_items_do_not_trigger_model_calls(monkeypatch):
     item = sample()
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
-    monkeypatch.setattr(pipeline, "collect", lambda day: ([item], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([item], [{"source": "test", "status": "ok"}]))
     def fail(*args):
         raise AssertionError("Known item must not be fetched or billed")
     monkeypatch.setattr(pipeline, "enrich", fail)
@@ -120,7 +120,7 @@ def test_partial_retry_only_analyzes_original_failed_candidates(monkeypatch):
     original, fresh = sample(), sample()
     fresh["id"], fresh["title"] = "fresh", "New unrelated candidate"
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
-    monkeypatch.setattr(pipeline, "collect", lambda day: ([original, fresh], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([original, fresh], [{"source": "test", "status": "ok"}]))
     monkeypatch.setattr(pipeline, "enrich", lambda value: value)
     calls = []
     def run(item, *args):
@@ -134,7 +134,7 @@ def test_partial_retry_only_analyzes_original_failed_candidates(monkeypatch):
 
 def test_missing_partial_retry_stays_partial_without_fresh_billing(monkeypatch):
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
-    monkeypatch.setattr(pipeline, "collect", lambda day: ([sample()], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([sample()], [{"source": "test", "status": "ok"}]))
     def fail(*args):
         raise AssertionError("Fresh candidates must not be billed on partial retry")
     monkeypatch.setattr(pipeline, "analyze_candidate", fail)
@@ -146,7 +146,7 @@ def test_missing_partial_retry_stays_partial_without_fresh_billing(monkeypatch):
 def test_partial_retry_all_filtered_finishes_without_filler(monkeypatch):
     original = sample()
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
-    monkeypatch.setattr(pipeline, "collect", lambda day: ([original], [{"source": "test", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "collect", lambda day, **kwargs: ([original], [{"source": "test", "status": "ok"}]))
     monkeypatch.setattr(pipeline, "enrich", lambda value: value)
     monkeypatch.setattr(pipeline, "analyze_candidate", lambda *args: analysis(publish=False))
     result = pipeline.generate_edition("2026-10-16", [], retry_ids={original["id"]})

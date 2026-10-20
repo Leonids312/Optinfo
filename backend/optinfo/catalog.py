@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+from .journal_catalog import get_journals
 
 CONTENT_DIR = Path(__file__).resolve().parents[2] / "content"
 SECTIONS = [
@@ -44,19 +45,18 @@ TOPICS = [
     topic("global-events", "国际重大事件", "world", "重大新闻", "emergency", "war", "disaster", "global", "重大", "战争"),
 ]
 DEFAULT_TOPIC_IDS = [t["id"] for t in TOPICS if t["id"] not in {"quantum-optics", "photonics"}]
-JOURNALS = [
-    {"id": "nphoton", "name": "Nature Photonics", "issn": "1749-4893"},
-    {"id": "lsa", "name": "Light: Science & Applications", "issn": "2047-7538"},
-    {"id": "optica", "name": "Optica", "issn": "2334-2536"},
-    {"id": "oe", "name": "Optics Express", "issn": "1094-4087"},
-    {"id": "prb", "name": "Physical Review B", "issn": "2469-9950"},
-    {"id": "prapplied", "name": "Physical Review Applied", "issn": "2331-7019"},
-    {"id": "apl", "name": "Applied Physics Letters", "issn": "0003-6951"},
-    {"id": "arxiv", "name": "arXiv（预印本）"},
-]
+JOURNALS = get_journals()
+# New titles are optional preferences. Keep the thesis-derived defaults above
+# unchanged rather than enabling hundreds of unrelated subject journals.
+_topic_ids = {value["id"] for value in TOPICS}
+for journal in JOURNALS:
+    identifier = "journal-" + journal["id"]
+    if identifier not in _topic_ids and journal["id"] != "arxiv":
+        TOPICS.append(topic(identifier, journal["name"], "research", "期刊", journal["name"].casefold()))
+        _topic_ids.add(identifier)
 COMPANIES = json.loads((CONTENT_DIR / "companies.json").read_text(encoding="utf-8")) if (CONTENT_DIR / "companies.json").exists() else []
 for company in COMPANIES:
-    company.setdefault("compensation", {"masters": None, "phd": None, "currency": "CNY", "basis": "暂无可靠公开数据；学历本身不能确定薪酬，需区分地区、岗位、年份及总包口径。", "as_of": "", "sources": []})
+    company.setdefault("compensation", {"masters": None, "phd": None, "currency": "CNY", "basis": "暂无公开数据", "as_of": "", "sources": []})
     company.setdefault("bookmarked", False)
 
 def match_companies(text: str) -> list[str]:
@@ -69,6 +69,8 @@ def match_companies(text: str) -> list[str]:
             if alias.casefold() == "coherent":
                 # Coherent is also an ordinary optics term; require corporate context.
                 present = bool(re.search(r"\bcoherent\s+(?:corp(?:oration)?|inc|announced|reported)\b", lowered))
+            elif alias.casefold() == "arm":
+                present = bool(re.search(r"\barm\s+(?:holdings|ltd|limited|announced|reported|unveiled)\b", lowered))
             elif alias.isascii():
                 present = bool(re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", lowered))
             else:

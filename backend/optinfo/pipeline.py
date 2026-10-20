@@ -1,13 +1,14 @@
 """Evidence-first selection and DeepSeek Harness editorial pipeline."""
 from __future__ import annotations
 
-from datetime import datetime
+from collections import Counter
+from datetime import date, datetime
 import hashlib
 import os
-import re
 from zoneinfo import ZoneInfo
 
 from .catalog import COMPANIES, TOPICS, match_companies
+from .db import canonical_source_keys
 from .harness import HarnessUnavailable, analyze_candidate, chinese_caption, is_configured, safe_error_details
 from .sources import collect, enrich, materialize_figure
 
@@ -85,9 +86,11 @@ def sanitize_analysis(candidate: dict, analysis: dict, edition_date: str) -> dic
     clean_content = {k: content[k][:9000] for k in ("background", "approach", "results", "assessment")}
     figures = selected_figures(candidate, analysis)
     return {"id": candidate["id"], "kind": candidate["kind"], "section": candidate["section"],
-            "title": analysis["title"][:300], "summary": analysis["summary"][:1800], "published_at": candidate["published_at"],
+            "title": analysis["title"][:300], "original_title": candidate["title"],
+            "summary": analysis["summary"][:1800], "published_at": candidate["published_at"],
             "briefing_date": edition_date, "source_url": candidate["source_url"], "source_name": candidate["source_name"],
             "doi": candidate.get("doi", ""), "journal": candidate.get("journal", ""), "company_ids": candidate.get("company_ids", []),
+            "source_id": candidate.get("source_id", ""),
             "tags": [str(t)[:80] for t in analysis.get("tags", [])[:8]] if isinstance(analysis.get("tags"), list) else [],
             "importance": importance, "content": clean_content, "figures": figures,
             "content_revision": 2, "analysis_status": "complete", "math_status": "complete",
@@ -111,85 +114,171 @@ def discovered_companies(candidate: dict, analysis: dict) -> list[dict]:
             continue
         result.append({"id": "company-" + hashlib.sha256(name.casefold().encode()).hexdigest()[:16],
                        "name": name, "name_en": name if name.isascii() else "", "logo_url": "", "website": "",
-                       "description": "从资讯中发现的企业，详细业务与企业身份待进一步核实。原文提及：" + quote,
-                       "businesses": [], "listed": None, "listing": "待核实", "compensation": {"masters": None, "phd": None, "currency": "CNY", "basis": "暂无可靠公开数据", "as_of": "", "sources": []},
+                       "description": "原文提及：" + quote,
+                       "businesses": [], "listed": None, "listing": "暂无公开数据", "compensation": {"masters": None, "phd": None, "currency": "CNY", "basis": "暂无公开数据", "as_of": "", "sources": []},
                        "sources": [{"title": candidate["title"], "url": candidate["source_url"]}], "bookmarked": False})
     return result
 
+def company_group(candidate: dict) -> str:
+    """Known publisher/company first; unknown companies share their source budget."""
+    company_ids = candidate.get("company_ids") or match_companies(candidate.get("title", "") + " " + candidate.get("evidence_text", ""))
+    return "company:" + company_ids[0] if company_ids else "source:" + (candidate.get("source_id") or candidate.get("source_name") or "unknown")
+
+
 def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: bool = False,
-                     exclude_ids: set[str] | None = None, retry_ids: set[str] | None = None) -> dict:
+                     exclude_ids: set[str] | None = None, exclude_keys: set[str] | None = None,
+                     retry_ids: set[str] | None = None, industry_only: bool = False,
+                     industry_limit: int = 4, company_counts: dict[str, int] | None = None) -> dict:
     if not is_configured():
         raise HarnessUnavailable("官方 DeepSeek Harness 尚未就绪，未生成替代内容。")
-    candidates, diagnostics = collect(edition_date, sections={"world"}) if major_only else collect(edition_date)
-    candidates = [c for c in candidates if c["id"] not in (exclude_ids or set())]
+    if major_only and industry_only or not 1 <= industry_limit <= 8:
+        raise ValueError("Invalid generation scope")
+    sections = {"world"} if major_only else {"industry"} if industry_only else None
+    candidates, diagnostics = collect(edition_date, sections=sections, topic_ids=topic_ids,
+                                      industry_days=365 if retry_ids is not None else 7)
     retry_scope = set(retry_ids) - (exclude_ids or set()) if retry_ids is not None else None
-    missing = set()
-    if retry_scope is not None:
-        # A partial edition retries its original failures only. Otherwise one bad
-        # item can cause fresh articles and charges on every subsequent retry.
-        candidates = [c for c in candidates if c["id"] in retry_scope]
-        missing = retry_scope - {c["id"] for c in candidates}
-        diagnostics.extend({"item": item_id, "status": "retry_missing", "error": "CandidateUnavailable"}
-                           for item_id in sorted(missing))
-    if not any(d["status"] == "ok" for d in diagnostics):
-        raise SourceCollectionUnavailable("All sources failed; existing editions remain unchanged")
-    limits = {"research": 6, "industry": 4, "world": 3}
-    # Hard bound limits cost and article fetching; source failures remain visible.
+    limits = {"research": 6, "industry": industry_limit, "world": 3}
     max_candidates = max(3, min(30, int(os.getenv("OPTINFO_MAX_CANDIDATES", "18"))))
-    ranked = []
-    for section in (("world",) if major_only else ("research", "industry", "world")):
-        pool = sorted([c for c in candidates if c["section"] == section], key=lambda c: (score_candidate(c, topic_ids), c["published_at"]), reverse=True)
-        ranked.extend(pool if retry_scope is not None else pool[: limits[section] + 2])
-    deferred = ranked[max_candidates:] if retry_scope is not None else []
-    diagnostics.extend({"item": item["id"], "status": "retry_deferred"} for item in deferred)
-    ranked = ranked[:max_candidates]
     labels = [t["label"] for t in TOPICS if t["id"] in topic_ids]
-    items, failures, companies, reviewed_ids = [], len(missing) + len(deferred), {c["id"]: c for c in COMPANIES}, []
-    seen_titles = set()
-    model_failures = 0
-    for index, raw in enumerate(ranked):
-        if retry_scope is None and sum(i["section"] == raw["section"] for i in items) >= limits[raw["section"]]:
-            continue
-        title_key = re.sub(r"\W+", "", raw["title"]).casefold()
-        if retry_scope is None and title_key in seen_titles:
-            continue
-        seen_titles.add(title_key)
-        candidate = enrich(raw)
-        candidate["company_ids"] = list(dict.fromkeys([*candidate.get("company_ids", []), *match_companies(candidate["title"] + " " + candidate.get("evidence_text", ""))]))
-        if len(candidate.get("evidence_text", "")) < 100:
-            if retry_scope is not None:
-                failures += 1
-            diagnostics.append({"item": candidate["id"], "status": "retry_missing" if retry_scope is not None else "insufficient_evidence",
-                                "error": "InsufficientEvidence"})
-            continue
+    items, failures, companies, reviewed_ids, reviews = [], 0, {c["id"]: c for c in COMPANIES}, [], []
+    known_keys = set(exclude_keys or ()) | {"id:" + item_id for item_id in (exclude_ids or ())}
+    seen_keys, counts, group_attempts = set(), Counter(company_counts or {}), Counter()
+    attempted, model_failures, stopped = 0, 0, False
+
+    def eligible(raw):
+        keys = canonical_source_keys(raw)
+        return not (keys & known_keys or keys & seen_keys)
+
+    def process(raw):
+        nonlocal failures, attempted, model_failures, stopped
+        source_keys = canonical_source_keys(raw)
+        if source_keys & known_keys or source_keys & seen_keys:
+            return
+        seen_keys.update(source_keys)
+        attempted += 1
+        group = company_group(raw)
+        group_attempts[group] += 1
         try:
+            candidate = enrich(raw)
+            candidate["company_ids"] = list(dict.fromkeys([*candidate.get("company_ids", []), *match_companies(candidate["title"] + " " + candidate.get("evidence_text", ""))]))
+            aliases = canonical_source_keys(candidate) - source_keys
+            duplicate = bool(aliases & known_keys or aliases & seen_keys)
+            source_keys.update(aliases)
+            seen_keys.update(source_keys)
+            if duplicate:
+                diagnostics.append({"item": candidate["id"], "status": "already_reviewed"})
+                return
+            if len(candidate.get("evidence_text", "")) < 100:
+                if retry_scope is not None:
+                    failures += 1
+                diagnostics.append({"item": candidate["id"], "status": "retry_missing" if retry_scope is not None else "insufficient_evidence",
+                                    "error": "InsufficientEvidence"})
+                return
             require_paper_evidence(candidate)
             analysis = analyze_candidate(candidate, labels, edition_date)
             item = sanitize_analysis(candidate, analysis, edition_date)
             reviewed_ids.append(candidate["id"])
+            reviews.append({"item": candidate["id"], "keys": sorted(source_keys), "decision": "published" if item else "filtered"})
             if item:
                 for company in discovered_companies(candidate, analysis):
                     companies[company["id"]] = company
                     item["company_ids"] = list(dict.fromkeys([*item["company_ids"], company["id"]]))
+                if item["section"] == "industry":
+                    counts[group] += 1
+                    # Keep the true publication date; this is an explicitly older
+                    # addition, not a claim that the news happened today.
+                    try:
+                        age = (date.fromisoformat(edition_date) - datetime.fromisoformat(item["published_at"].replace("Z", "+00:00")).date()).days
+                        item["history_backfill"] = age > 7
+                    except ValueError:
+                        item["history_backfill"] = False
                 items.append(item)
             diagnostics.append({"item": candidate["id"], "status": "published" if item else "filtered", "access": candidate.get("access_status", "")})
         except EvidencePending as exc:
             failures += 1
-            diagnostics.append({"item": candidate["id"], "status": "evidence_pending", "reason": exc.reason,
-                                "access": candidate.get("access_status", "")})
+            diagnostics.append({"item": raw["id"], "status": "evidence_pending", "reason": exc.reason,
+                                "access": raw.get("access_status", "")})
         except Exception as exc:
             failures += 1
             model_failures += 1
-            diagnostics.append({"item": candidate["id"], "status": "model_failed", **safe_error_details(exc)})
-            # Avoid billing/retrying an outage for the whole candidate set.
+            diagnostics.append({"item": raw["id"], "status": "model_failed", **safe_error_details(exc)})
             if model_failures >= 3 and not items:
-                diagnostics.extend({"item": item["id"], "status": "retry_deferred"} for item in ranked[index + 1:])
+                stopped = True
+
+    def section_count(section):
+        return sum(item["section"] == section for item in items)
+
+    def process_section(section):
+        pool = sorted((raw for raw in candidates if raw["section"] == section and eligible(raw)),
+                      key=lambda raw: (score_candidate(raw, topic_ids), raw["published_at"]), reverse=True)
+        planned = pool[:limits[section] + 2]
+        for index, raw in enumerate(planned):
+            if stopped or attempted >= max_candidates or section_count(section) >= limits[section]:
+                if stopped:
+                    diagnostics.extend({"item": entry["id"], "status": "retry_deferred"}
+                                       for entry in planned[index:index + max_candidates - attempted])
                 break
-    # Preserve successful filtered decisions even when nothing is published;
-    # a single transient model failure must not rebill them on the next hourly run.
+            process(raw)
+
+    if retry_scope is not None:
+        # Existing partial editions never admit fresh candidates, even when their
+        # industry sources need a longer lookback to recover the original IDs.
+        observed = {raw["id"] for raw in candidates}
+        missing = retry_scope - observed
+        failures += len(missing)
+        diagnostics.extend({"item": item_id, "status": "retry_missing", "error": "CandidateUnavailable"} for item_id in sorted(missing))
+        for raw in candidates:
+            if raw["id"] not in retry_scope or (sections and raw["section"] not in sections):
+                continue
+            if not eligible(raw):
+                diagnostics.append({"item": raw["id"], "status": "already_reviewed"})
+            elif industry_only and section_count("industry") >= industry_limit:
+                diagnostics.append({"item": raw["id"], "status": "target_reached"})
+            elif stopped or attempted >= max_candidates:
+                failures += 1
+                diagnostics.append({"item": raw["id"], "status": "retry_deferred"})
+            else:
+                process(raw)
+    else:
+        if not major_only and not industry_only:
+            process_section("research")
+        if not major_only:
+            industry_pool = {}
+
+            def select_industry(per_company):
+                while not stopped and attempted < max_candidates and section_count("industry") < industry_limit:
+                    pool = [raw for raw in industry_pool.values() if eligible(raw) and counts[company_group(raw)] < per_company]
+                    if not pool:
+                        break
+                    # A source with many releases cannot monopolize the budget.
+                    # Within each company the most recent release is read first.
+                    pool.sort(key=lambda raw: (raw["published_at"], score_candidate(raw, topic_ids)), reverse=True)
+                    pool.sort(key=lambda raw: (counts[company_group(raw)], group_attempts[company_group(raw)]))
+                    process(pool[0])
+
+            for window in (7, 30, 90, 365):
+                if stopped or attempted >= max_candidates or section_count("industry") >= industry_limit:
+                    break
+                if window == 7:
+                    batch = candidates
+                else:
+                    batch, audit = collect(edition_date, sections={"industry"}, industry_days=window, topic_ids=topic_ids)
+                    diagnostics.extend({**entry, "industry_days": window} for entry in audit)
+                for raw in batch:
+                    if raw["section"] == "industry":
+                        industry_pool.setdefault(raw["id"], raw)
+                select_industry(1)
+            # Only after exhausting distinct companies across all four windows
+            # can a company contribute a second item. Never pad with invented news.
+            select_industry(2)
+        if not industry_only:
+            process_section("world")
+    if not any(entry["status"] == "ok" or
+               (entry["status"] == "partial" and entry.get("count", 0) > 0) for entry in diagnostics):
+        raise SourceCollectionUnavailable("All sources failed; existing editions remain unchanged")
     return {"items": sorted(items, key=lambda i: (i["section"], -i["importance"])), "companies": list(companies.values()),
             "diagnostics": diagnostics, "status": "partial" if failures else "ready", "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
-            "topic_ids": topic_ids, "reviewed_ids": reviewed_ids}
+            "topic_ids": topic_ids, "reviewed_ids": reviewed_ids, "reviews": reviews}
 
 
 def repair_papers(db, topic_ids: list[str], *, item_ids: set[str] | None = None, limit: int = 20, force: bool = False) -> dict:

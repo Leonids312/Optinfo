@@ -37,9 +37,6 @@ PUBLISHER_ALTERNATES = {
 FEEDS = [
     {"id": "nature-photonics", "name": "Nature Photonics", "url": "https://www.nature.com/nphoton.rss", "section": "research", "journal": "Nature Photonics"},
     {"id": "light", "name": "Light: Science & Applications", "url": "https://www.nature.com/lsa.rss", "section": "research", "journal": "Light: Science & Applications"},
-    {"id": "nvidia", "name": "NVIDIA Newsroom", "url": "https://nvidianews.nvidia.com/releases.xml", "section": "industry", "company": "nvidia"},
-    {"id": "amd", "name": "AMD Newsroom", "url": "https://ir.amd.com/news-events/press-releases/rss", "section": "industry", "company": "amd"},
-    {"id": "intel", "name": "Intel Newsroom", "url": "https://newsroom.intel.com/feed", "section": "industry", "company": "intel"},
     {"id": "fed", "name": "Federal Reserve", "url": "https://www.federalreserve.gov/feeds/press_all.xml", "section": "world"},
     {"id": "ecb", "name": "European Central Bank", "url": "https://www.ecb.europa.eu/rss/press.html", "section": "world"},
     {"id": "bbc-world", "name": "BBC World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml", "section": "world"},
@@ -48,9 +45,6 @@ FEEDS = [
 HTML_SOURCES = [
     {"id": "ndrc", "name": "国家发展和改革委员会", "url": "https://www.ndrc.gov.cn/xxgk/zcfb/tz/", "section": "world", "selector": "li > a[href^='./']", "date_parent": "li"},
     {"id": "pbc", "name": "中国人民银行", "url": "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html", "section": "world", "selector": "a[istitle]", "date_parent": "td"},
-    {"id": "asml", "name": "ASML 官方公告", "url": "https://investor.asml.com/news/press-releases-and-announcements", "section": "industry", "selector": "a[href*='/news/press-releases/']", "company": "asml"},
-    {"id": "amec", "name": "中微公司官方新闻", "url": "https://www.amec-inc.com/index.php/index/Lists/index/catid/97.html", "section": "industry", "selector": "a[href*='/news/'], a[href*='/show/']", "company": "amec", "date_parent": "li"},
-    {"id": "hamamatsu", "name": "滨松光子学官方新闻", "url": "https://www.hamamatsu.com/us/en/news.html", "section": "industry", "selector": "span.Title a[href*='/news/']", "company": "hamamatsu", "date_parent": "li"},
 ]
 
 def plain_text(value: str, limit: int = 20000) -> str:
@@ -217,21 +211,35 @@ def collect_html_list(spec: dict, edition: date) -> list[dict]:
             result.append(item)
     return result
 
-def collect(edition_date: str, sections: set[str] | None = None) -> tuple[list[dict], list[dict]]:
+def collect(edition_date: str, sections: set[str] | None = None, *, industry_days: int = 7,
+            topic_ids: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+    from .industry_sources import collect_industry
+    from .journal_sources import collect_journals
     edition = date.fromisoformat(edition_date)
     sections = sections or {"research", "industry", "world"}
-    jobs = [(spec["id"], collect_feed, (spec, edition)) for spec in FEEDS if spec["section"] in sections]
-    jobs.extend((spec["id"], collect_html_list, (spec, edition)) for spec in HTML_SOURCES if spec["section"] in sections)
+    # Company adapters own their history windows and official-site pagination.
+    # Keep public/news RSS separate so industry-only widening never recollects
+    # research, policy or markets.
+    jobs = [(spec["id"], collect_feed, (spec, edition)) for spec in FEEDS if spec["section"] in sections and spec["section"] != "industry"]
+    jobs.extend((spec["id"], collect_html_list, (spec, edition)) for spec in HTML_SOURCES if spec["section"] in sections and spec["section"] != "industry")
     if "research" in sections:
         jobs.append(("arxiv", collect_arxiv, (edition,)))
-        jobs.extend(("crossref-" + j["id"], collect_crossref, (j, edition)) for j in JOURNALS if j.get("issn"))
+        jobs.append(("journal-collector", collect_journals, (edition, topic_ids)))
+    if "industry" in sections:
+        jobs.append(("industry-collector", collect_industry, (edition, industry_days)))
     diagnostics, found = [], []
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(fn, *args): name for name, fn, args in jobs}
         for future in as_completed(futures):
             name = futures[future]
             try:
-                items = future.result()
+                result = future.result()
+                if name in {"journal-collector", "industry-collector"}:
+                    items, details = result
+                    found.extend(items)
+                    diagnostics.extend(details)
+                    continue
+                items = result
                 found.extend(items)
                 diagnostics.append({"source": name, "status": "ok", "count": len(items)})
             except Exception as exc:

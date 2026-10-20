@@ -219,12 +219,12 @@ def test_missing_paper_evidence_remains_partial_and_unreviewed_without_billing(m
     raw = paper()
     raw["evidence_level"] = "abstract"
     monkeypatch.setattr(pipeline, "is_configured", lambda: True)
-    monkeypatch.setattr(pipeline, "collect", lambda *_: ([raw], [{"source": "fixture", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "collect", lambda *_, **kwargs: ([raw], [{"source": "fixture", "status": "ok"}]))
     monkeypatch.setattr(pipeline, "enrich", lambda value: value)
     monkeypatch.setattr(pipeline, "analyze_candidate", lambda *_: pytest.fail("Incomplete evidence must not be billed"))
     value = pipeline.generate_edition("2026-10-16", [])
     assert value["status"] == "partial" and value["items"] == [] and value["reviewed_ids"] == []
-    assert value["diagnostics"][-1]["status"] == "evidence_pending"
+    assert any(entry["status"] == "evidence_pending" for entry in value["diagnostics"])
 
 
 def test_media_auth_content_type_and_path_validation(tmp_path, monkeypatch):

@@ -1,10 +1,15 @@
 """Small durable SQLite store. Edition snapshots preserve their original ranking/content."""
 from contextlib import contextmanager
 from datetime import date as Date, datetime, timedelta
+import hashlib
+import html
 import json
 from pathlib import Path
 import sqlite3
+import re
+import unicodedata
 from typing import Any
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 from .config import SHANGHAI, now_shanghai
@@ -16,6 +21,59 @@ def _json(value: Any) -> str:
 
 def _day(value: str) -> str:
     return Date.fromisoformat(value).isoformat()
+
+
+def canonical_source_keys(item: dict) -> set[str]:
+    """Source identity, independent of rewritten titles and immutable public IDs."""
+    keys = {"id:" + str(item["id"])} if item.get("id") else set()
+    doi = str(item.get("doi", "")).strip()
+    doi = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi\s*:\s*)", "", doi, flags=re.I)
+    if re.match(r"^10\.\d{4,9}/\S+$", doi, re.I):
+        keys.add("doi:" + unquote(doi).casefold())
+    references = item.get("sources") or []
+    urls = [item.get("source_url", ""), item.get("evidence_url", ""), *(entry.get("url", "") for entry in references if isinstance(entry, dict))]
+    for url in urls:
+        try:
+            parsed = urlsplit(str(url).strip())
+            if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+                continue
+            host = parsed.hostname.casefold().removeprefix("www.")
+            path = re.sub(r"%[0-9a-fA-F]{2}", lambda match: chr(int(match[0][1:], 16)) if chr(int(match[0][1:], 16)) in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~" else match[0].upper(), parsed.path)
+            if host in {"doi.org", "dx.doi.org"}:
+                keys.add("doi:" + unquote(path.lstrip("/")).casefold())
+            if host in {"arxiv.org", "export.arxiv.org"}:
+                match = re.match(r"/(?:abs|html|pdf)/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?/?$", path)
+                if match:
+                    keys.add("arxiv:" + match[1])
+            query = sorted((key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+                           if not key.casefold().startswith("utm_") and key.casefold() not in {"fbclid", "gclid", "mc_cid", "mc_eid", "ref_src", "ref_url"})
+            if parsed.port not in {None, 80, 443}:
+                host += ":" + str(parsed.port)
+            canonical = urlunsplit(("https", host, path.rstrip("/") or "/", urlencode(query), ""))
+            keys.add("url:" + hashlib.sha256(canonical.encode()).hexdigest())
+        except (ValueError, TypeError):
+            continue
+    original = item.get("original_title") or next((entry.get("title") for entry in references if isinstance(entry, dict) and entry.get("title")), None) or item.get("title", "")
+    title = "".join(character for character in unicodedata.normalize("NFKC", html.unescape(str(original))).casefold() if character.isalnum())
+    section = item.get("section", "")
+    if len(title) >= 16 and not (section == "research" and any(key.startswith("doi:") for key in keys)):
+        try:
+            published = Date.fromisoformat(str(item.get("published_at", ""))[:10])
+        except ValueError:
+            published = None
+        if published:
+            digest = hashlib.sha256(title.encode()).hexdigest()
+            if section == "industry":
+                company_ids = item.get("company_ids") or []
+                subject = "company:" + str(company_ids[0]) if company_ids else "source:" + str(item.get("source_id") or item.get("source_name") or "")
+            else:
+                subject = section
+            # An identical quarterly headline or another company's generic title
+            # is a new event. Nearby source-date differences, including month
+            # boundaries, can still identify a republished version of one story.
+            for offset in range(-2, 3):
+                keys.add("title:" + subject + ":" + (published + timedelta(days=offset)).isoformat() + ":" + digest)
+    return keys
 
 
 def _item(value: dict, day: str) -> dict:
@@ -74,6 +132,10 @@ class Database:
                 CREATE TABLE IF NOT EXISTS candidate_reviews (
                     date TEXT NOT NULL, item_id TEXT NOT NULL, reviewed_at TEXT NOT NULL,
                     PRIMARY KEY(date,item_id));
+                CREATE TABLE IF NOT EXISTS published_source_keys (
+                    source_key TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES items(id));
+                CREATE TABLE IF NOT EXISTS reviewed_source_keys (
+                    source_key TEXT PRIMARY KEY, item_id TEXT NOT NULL, decision TEXT NOT NULL, reviewed_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id TEXT PRIMARY KEY, item_id TEXT UNIQUE NOT NULL REFERENCES items(id),
                     created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
@@ -85,6 +147,10 @@ class Database:
                     session_id TEXT PRIMARY KEY REFERENCES chat_sessions(id) ON DELETE CASCADE,
                     expires_at TEXT NOT NULL);
             """)
+            # Older releases preserved source titles in sources[0]; indexing them
+            # does not rewrite existing item IDs, snapshots or user data.
+            for row in conn.execute("SELECT id,data_json FROM items").fetchall():
+                conn.executemany("INSERT OR IGNORE INTO published_source_keys VALUES(?,?)", [(key, row["id"]) for key in canonical_source_keys(json.loads(row["data_json"]))])
         return self
 
     def edition_exists(self, day: str) -> bool:
@@ -133,6 +199,7 @@ class Database:
     def _persist_item(conn, item, at):
         conn.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at",
                      (item["id"], _json(item), at))
+        conn.executemany("INSERT OR IGNORE INTO published_source_keys VALUES(?,?)", [(key, item["id"]) for key in canonical_source_keys(item)])
 
     def upsert_items(self, items: list[dict], briefing_date: str | None = None):
         at = now_shanghai().isoformat()
@@ -153,7 +220,7 @@ class Database:
                     raise ValueError("Companies require id and name")
                 value = dict(name_en="", logo_url="", website="", description="", businesses=[],
                              listed=None, listing="", compensation={"masters": None, "phd": None,
-                             "currency": "CNY", "basis": "暂无可靠公开数据", "as_of": "", "sources": []}, sources=[], bookmarked=False)
+                             "currency": "CNY", "basis": "暂无公开数据", "as_of": "", "sources": []}, sources=[], bookmarked=False)
                 value.update(company)
                 value["bookmarked"] = False
                 conflict = "DO UPDATE SET data_json=excluded.data_json" if overwrite else "DO NOTHING"
@@ -231,9 +298,55 @@ class Database:
         dates = self.available_dates()
         return dates[0] if dates else None
 
-    def reviewed_ids(self, day: str) -> set[str]:
+    def reviewed_ids(self, day: str | None = None) -> set[str]:
         with self.connection() as conn:
-            return {row[0] for row in conn.execute("SELECT item_id FROM candidate_reviews WHERE date=?", (_day(day),))}
+            if day is not None:
+                return {row[0] for row in conn.execute("SELECT item_id FROM candidate_reviews WHERE date=?", (_day(day),))}
+            return {row[0] for row in conn.execute("SELECT DISTINCT item_id FROM candidate_reviews")}
+
+    def excluded_source_keys(self) -> set[str]:
+        with self.connection() as conn:
+            return {row[0] for row in conn.execute("SELECT source_key FROM published_source_keys UNION SELECT source_key FROM reviewed_source_keys")}
+
+    def mark_source_reviews(self, reviews: list[dict]):
+        at = now_shanghai().isoformat()
+        with self.connection() as conn:
+            for review in reviews:
+                if review.get("decision") not in {"published", "filtered"}:
+                    raise ValueError("Only successful editorial reviews are durable")
+                conn.executemany("INSERT OR IGNORE INTO reviewed_source_keys VALUES(?,?,?,?)", [(key, review["item"], review["decision"], at) for key in review["keys"]])
+
+    def append_industry(self, day: str, items: list[dict], *, target: int = 4, metadata: dict | None = None) -> list[str]:
+        """Append bounded industry additions; existing edition content is untouched."""
+        day = _day(day)
+        if not 1 <= target <= 8 or any(item.get("section") != "industry" for item in items):
+            raise ValueError("Invalid industry addition scope")
+        at, added = now_shanghai().isoformat(), []
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            edition = conn.execute("SELECT metadata_json FROM editions WHERE date=?", (day,)).fetchone()
+            if edition is None:
+                raise ValueError("Industry fill requires an existing edition")
+            rows = conn.execute("SELECT position,data_json FROM edition_items WHERE date=?", (day,)).fetchall()
+            current = sum(json.loads(row["data_json"]).get("section") == "industry" for row in rows)
+            position = max((row["position"] for row in rows), default=-1) + 1
+            known = {row[0] for row in conn.execute("SELECT source_key FROM published_source_keys")}
+            for value in items:
+                if current >= target:
+                    break
+                keys = canonical_source_keys(value)
+                if keys & known:
+                    continue
+                item = _item(value, day)
+                self._persist_item(conn, item, at)
+                conn.execute("INSERT INTO edition_items VALUES(?,?,?,?)", (day, item["id"], position, _json(item)))
+                known.update(keys)
+                added.append(item["id"])
+                position, current = position + 1, current + 1
+            audit = json.loads(edition["metadata_json"])
+            audit["industry_fill"] = {**(metadata or {}), "generated_at": at, "added": added, "target": target}
+            conn.execute("UPDATE editions SET metadata_json=? WHERE date=?", (_json(audit), day))
+        return added
 
     def mark_reviewed(self, day: str, item_ids):
         day = _day(day)

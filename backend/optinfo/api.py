@@ -152,7 +152,7 @@ def create_app(settings: Settings | None = None, *, clock=now_shanghai, harness=
     def bootstrap():
         return {"timezone": "Asia/Shanghai", "sections": sections, "topics": topics,
                 **database.preference_state(current_time().date().isoformat(), default_ids),
-                "latest_date": database.latest_date(), "journals": list(getattr(catalog, "JOURNALS", []))}
+                "latest_date": database.latest_date(), "journals": list(catalog.get_journals() if callable(getattr(catalog, "get_journals", None)) else getattr(catalog, "JOURNALS", []))}
 
     @app.get("/api/bootstrap", dependencies=auth)
     async def get_bootstrap():
@@ -174,7 +174,7 @@ def create_app(settings: Settings | None = None, *, clock=now_shanghai, harness=
         if section and section not in {value["id"] for value in sections}:
             raise HTTPException(422, "未知资讯分区")
         # Accept catalog journal IDs and display names; stored items use the display name.
-        journal_name = next((j["name"] for j in getattr(catalog, "JOURNALS", []) if j["id"] == journal), journal)
+        journal_name = next((j["name"] for j in (catalog.get_journals() if callable(getattr(catalog, "get_journals", None)) else getattr(catalog, "JOURNALS", [])) if j["id"] == journal), journal)
         historical = not date and bool(q.strip() or journal or company or bookmarked)
         return database.briefing(day, historical, q=q.strip(), section=section, journal=journal_name, company=company, bookmarked=bookmarked)
 

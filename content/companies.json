@@ -425,5 +425,246 @@
         "url": "https://job.xidian.edu.cn/company/view/id/825550"
       }
     ]
+  },
+  {
+    "id": "arm",
+    "name": "安谋",
+    "name_en": "Arm",
+    "aliases": [
+      "Arm Holdings"
+    ],
+    "website": "https://www.arm.com/",
+    "logo_url": "https://newsroom.arm.com/wp-content/uploads/2021/08/cropped-arm_icon-192x192.png",
+    "description": "提供处理器架构、CPU 产品、计算子系统与计算平台，服务云端、移动设备、汽车和物联网等市场。",
+    "businesses": [
+      "CPU 架构与处理器 IP",
+      "计算子系统与平台",
+      "云端、移动和汽车计算"
+    ],
+    "listed": true,
+    "listing": "纳斯达克 ADS：ARM；详见官方投资者常见问题",
+    "sources": [
+      {
+        "title": "Arm 公司介绍",
+        "url": "https://www.arm.com/company"
+      },
+      {
+        "title": "Arm 上市信息",
+        "url": "https://investors.arm.com/investor-info/faqs"
+      },
+      {
+        "title": "Arm 官方新闻及标志",
+        "url": "https://newsroom.arm.com/"
+      }
+    ]
+  },
+  {
+    "id": "smic",
+    "name": "中芯国际",
+    "name_en": "SMIC",
+    "aliases": [
+      "Semiconductor Manufacturing International Corporation"
+    ],
+    "website": "https://www.smics.com/",
+    "logo_url": "https://www.smics.com/images/title-logo.png",
+    "description": "集成电路晶圆代工企业，为客户提供不同技术节点和工艺平台的晶圆制造服务。",
+    "businesses": [
+      "集成电路晶圆代工",
+      "逻辑与特色工艺制造"
+    ],
+    "listed": true,
+    "listing": "香港联交所：00981；上海证券交易所科创板：688981",
+    "sources": [
+      {
+        "title": "中芯国际官方新闻及标志",
+        "url": "https://www.smics.com/en/site/news"
+      },
+      {
+        "title": "中芯国际业绩公告与上市信息",
+        "url": "https://www.smics.com/en/site/news_read/7895"
+      }
+    ]
+  },
+  {
+    "id": "samsung",
+    "name": "三星电子",
+    "name_en": "Samsung Electronics",
+    "aliases": [
+      "Samsung",
+      "三星"
+    ],
+    "website": "https://www.samsung.com/",
+    "logo_url": "https://img.global.news.samsung.com/image/newlogo/logo_samsung-newsroom.png",
+    "description": "电子与半导体企业；本资讯目录重点跟踪其存储器、系统半导体和晶圆代工业务，企业主体为三星电子。",
+    "businesses": [
+      "DRAM / NAND / HBM 存储器",
+      "系统半导体",
+      "晶圆代工"
+    ],
+    "listed": true,
+    "listing": "韩国交易所普通股：005930；优先股与存托凭证详见官方页面",
+    "sources": [
+      {
+        "title": "三星半导体官方新闻",
+        "url": "https://news.samsung.com/global/category/technology/semiconductors/feed"
+      },
+      {
+        "title": "三星电子上市信息",
+        "url": "https://www.samsung.com/global/ir/stock-information/listing-Info/"
+      }
+    ]
+  },
+  {
+    "id": "sk-hynix",
+    "name": "SK 海力士",
+    "name_en": "SK hynix",
+    "aliases": [
+      "SK Hynix",
+      "海力士"
+    ],
+    "website": "https://www.skhynix.com/",
+    "logo_url": "https://news.skhynix.com/en/wp-content/themes/skhynix/assets/images/ico_favi_bg_white.png",
+    "description": "研发和生产存储半导体，主要产品包括 DRAM、HBM、NAND Flash 及多芯片封装存储产品。",
+    "businesses": [
+      "DRAM 与 HBM",
+      "NAND Flash",
+      "存储器与多芯片封装"
+    ],
+    "listed": true,
+    "listing": "韩国交易所普通股：000660；存托凭证详见官方页面",
+    "sources": [
+      {
+        "title": "SK hynix 公司业务",
+        "url": "https://www.skhynix.com/company/UI-FR-CP02/"
+      },
+      {
+        "title": "SK hynix 上市信息",
+        "url": "https://www.skhynix.com/ir/UI-FR-IR03/"
+      },
+      {
+        "title": "官方新闻与标志",
+        "url": "https://news.skhynix.com/en/"
+      }
+    ]
+  },
+  {
+    "id": "micron",
+    "name": "美光科技",
+    "name_en": "Micron",
+    "aliases": [
+      "Micron Technology",
+      "美光"
+    ],
+    "website": "https://www.micron.com/",
+    "logo_url": "https://www.micron.com/content/dam/micron/global/favicon/apple-icon-60x60.png",
+    "description": "半导体存储与数据存储企业，提供 DRAM、NAND、NOR、HBM、SSD 及多芯片封装产品。",
+    "businesses": [
+      "DRAM / HBM",
+      "NAND / NOR",
+      "SSD 与多芯片封装"
+    ],
+    "listed": true,
+    "listing": "纳斯达克：MU",
+    "sources": [
+      {
+        "title": "Micron 公司介绍",
+        "url": "https://www.micron.com/about/company/corporate-profile"
+      },
+      {
+        "title": "Micron 财务与上市信息",
+        "url": "https://investors.micron.com/financials/quarterly-results/default.aspx"
+      },
+      {
+        "title": "官方新闻及标志",
+        "url": "https://www.micron.com/about/press/news"
+      }
+    ]
+  },
+  {
+    "id": "kla",
+    "name": "科磊",
+    "name_en": "KLA",
+    "aliases": [
+      "KLA Corporation",
+      "KLA-Tencor"
+    ],
+    "website": "https://www.kla.com/",
+    "logo_url": "https://d1io3yog0oux5.cloudfront.net/_796af9c73d54dd068b3ab74e91c701fb/klatencor/files/theme/images/favicons/apple-touch-icon.png",
+    "description": "提供半导体及电子制造所需的工艺控制、检测、量测与良率管理解决方案，涉及电子和光子光学、传感器及数据分析。",
+    "businesses": [
+      "晶圆与掩模检测",
+      "工艺量测",
+      "良率与工艺控制"
+    ],
+    "listed": true,
+    "listing": "上市公司：KLAC；证券详情见官方投资者关系页面",
+    "sources": [
+      {
+        "title": "KLA 官方公司与产品介绍",
+        "url": "https://www.kla.com/"
+      },
+      {
+        "title": "KLA 投资者关系与官方标志",
+        "url": "https://ir.kla.com/"
+      }
+    ]
+  },
+  {
+    "id": "lam-research",
+    "name": "泛林集团",
+    "name_en": "Lam Research",
+    "aliases": [
+      "Lam Research Corporation",
+      "泛林"
+    ],
+    "website": "https://www.lamresearch.com/",
+    "logo_url": "https://newsroom.lamresearch.com/apple-touch-icon-144-precomposed.png",
+    "description": "半导体制造设备与工艺技术企业，提供薄膜沉积、等离子体刻蚀、去胶、晶圆清洗及相关工艺解决方案。",
+    "businesses": [
+      "薄膜沉积",
+      "等离子体刻蚀",
+      "去胶与晶圆清洗",
+      "工艺建模与量测"
+    ],
+    "listed": true,
+    "listing": "上市公司：LRCX；证券详情见官方公告",
+    "sources": [
+      {
+        "title": "Lam Research 产品",
+        "url": "https://www.lamresearch.com/products/our-products/"
+      },
+      {
+        "title": "Lam Research 官方公告及标志",
+        "url": "https://newsroom.lamresearch.com/press-releases"
+      }
+    ]
+  },
+  {
+    "id": "ipg",
+    "name": "IPG 光子",
+    "name_en": "IPG Photonics",
+    "aliases": [
+      "IPG Photonics Corporation"
+    ],
+    "website": "https://www.ipgphotonics.com/",
+    "logo_url": "https://www.ipgphotonics.com/getmedia/31300b0d-dd79-4b36-897b-1e29dcd65916/IPG_Logo_Blue_Solid.png?width=300&height=82&ext=.png",
+    "description": "激光技术企业，提供光纤激光器及相关激光加工方案，用于焊接、切割等工业应用。",
+    "businesses": [
+      "光纤激光器",
+      "激光焊接与切割",
+      "工业激光系统"
+    ],
+    "listed": true,
+    "listing": "纳斯达克：IPGP",
+    "sources": [
+      {
+        "title": "IPG 官方业务新闻与标志",
+        "url": "https://www.ipgphotonics.com/en-us/newsroom/news"
+      },
+      {
+        "title": "IPG 上市信息",
+        "url": "https://investor.ipgphotonics.com/resources/investor-faqs/default.aspx"
+      }
+    ]
   }
 ]

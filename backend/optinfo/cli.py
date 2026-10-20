@@ -56,11 +56,13 @@ def cleanup(db: Database, settings: Settings) -> int:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Optinfo daily and major-event jobs")
-    parser.add_argument("command", choices=["generate", "major-events", "cleanup", "check", "collect", "repair-papers", "repair-math-only"])
+    parser.add_argument("command", choices=["generate", "major-events", "fill-industry", "cleanup", "check", "collect", "repair-papers", "repair-math-only"])
     parser.add_argument("--date", default=now_shanghai().date().isoformat())
     parser.add_argument("--item-id", action="append", help="Existing paper id to repair; repeat for multiple papers")
     parser.add_argument("--limit", type=int, default=20, help="Maximum existing papers to repair (1–50)")
     parser.add_argument("--force", action="store_true", help="Recheck already upgraded papers")
+    parser.add_argument("--industry-target", type=int, choices=range(1, 9), default=4,
+                        help="Maximum total industry items in today's edition for fill-industry")
     args = parser.parse_args(argv)
     day = date.fromisoformat(args.date).isoformat()
     settings = Settings.from_env()
@@ -91,13 +93,31 @@ def main(argv=None) -> int:
         if args.command == "generate" and db.edition_exists(day):
             print(json.dumps({"date": day, "status": "already_generated"}))
             return 0
-        from .pipeline import generate_edition
+        from .pipeline import company_group, generate_edition
         topic_ids = db.preferences_for_date(day, DEFAULT_TOPIC_IDS)
-        known_ids = {item["id"] for item in db.query_items()} | db.reviewed_ids(day)
-        generation_args = {"major_only": args.command == "major-events", "exclude_ids": known_ids}
-        previous = db.get_edition(day) if args.command == "generate" else None
-        if previous and previous["status"] == "partial":
-            retry_ids = {entry["item"] for entry in previous["metadata"].get("diagnostics", [])
+        known_ids = {item["id"] for item in db.query_items()} | db.reviewed_ids()
+        generation_args = {"major_only": args.command == "major-events", "exclude_ids": known_ids,
+                           "exclude_keys": db.excluded_source_keys()}
+        previous = db.get_edition(day) if args.command in {"generate", "fill-industry"} else None
+        retry_audit = previous["metadata"] if previous and previous["status"] == "partial" and args.command == "generate" else None
+        if args.command == "fill-industry":
+            if day != now_shanghai().date().isoformat() or previous is None:
+                raise ValueError("fill-industry requires today's existing edition")
+            current_industry = [item for item in db.query_items(day=day) if item["section"] == "industry"]
+            remaining = args.industry_target - len(current_industry)
+            if remaining <= 0:
+                print(json.dumps({"date": day, "status": "already_full", "items": len(current_industry)}))
+                return 0
+            counts = {}
+            for item in current_industry:
+                group = company_group(item)
+                counts[group] = counts.get(group, 0) + 1
+            generation_args.update(industry_only=True, industry_limit=remaining, company_counts=counts)
+            fill_audit = previous["metadata"].get("industry_fill", {})
+            if fill_audit.get("status") == "partial":
+                retry_audit = fill_audit
+        if retry_audit is not None:
+            retry_ids = {entry["item"] for entry in retry_audit.get("diagnostics", [])
                          if entry.get("item") and entry.get("status") in {"model_failed", "retry_missing", "retry_deferred", "evidence_pending"}}
             if not retry_ids:
                 # Do not silently replace an unknown older partial state with a
@@ -108,6 +128,10 @@ def main(argv=None) -> int:
         db.upsert_companies(result["companies"])
         if args.command == "major-events":
             db.upsert_items(result["items"], briefing_date=day)
+        elif args.command == "fill-industry":
+            added = db.append_industry(day, result["items"], target=args.industry_target,
+                                       metadata={"status": result["status"], "diagnostics": result["diagnostics"]})
+            result["items"] = [item for item in result["items"] if item["id"] in added]
         else:
             # Successful partial snapshots are reused without additional model calls.
             merged = {item["id"]: item for item in db.query_items(day=day)}
@@ -121,14 +145,17 @@ def main(argv=None) -> int:
                 retained = [entry for entry in previous["metadata"].get("diagnostics", [])
                             if (entry.get("item"), entry.get("source")) not in updates and entry.get("item") not in resolved_elsewhere]
                 result["diagnostics"] = retained + result["diagnostics"]
-            db.save_edition(day, result["items"], generated_at=result["generated_at"], status=result["status"], metadata={"topics": topic_ids, "diagnostics": result["diagnostics"]})
+            metadata = dict(previous["metadata"]) if previous else {}
+            metadata.update(topics=topic_ids, diagnostics=result["diagnostics"])
+            db.save_edition(day, result["items"], generated_at=result["generated_at"], status=result["status"], metadata=metadata)
         db.mark_reviewed(day, result.get("reviewed_ids", []))
+        db.mark_source_reviews(result.get("reviews", []))
         failures = [d for d in result["diagnostics"] if d["status"] in {"model_failed", "retry_missing", "retry_deferred", "evidence_pending"}]
         # Only fixed operational fields, never raw model text or exception payloads.
         safe_failures = [{key: entry[key] for key in ("item", "status", "reason", "error", "stage", "exception_type", "finish_reason", "attempts") if key in entry} for entry in failures]
         source_errors = [{key: entry[key] for key in ("source", "status", "error") if key in entry}
-                         for entry in result["diagnostics"] if entry["status"] == "failed"]
-        print(json.dumps({"date": day, "status": result["status"], "items": len(result["items"]), "source_failures": sum(d["status"] == "failed" for d in result["diagnostics"]),
+                         for entry in result["diagnostics"] if entry["status"] in {"failed", "partial"}]
+        print(json.dumps({"date": day, "status": result["status"], "items": len(result["items"]), "source_failures": sum(d["status"] in {"failed", "partial"} for d in result["diagnostics"]),
                           "source_errors": source_errors, "model_failures": safe_failures,
                           "reviewed": len(result.get("reviewed_ids", []))}, ensure_ascii=False))
     return 0

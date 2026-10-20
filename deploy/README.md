@@ -20,6 +20,8 @@ Optinfo 使用独立的服务用户、数据目录、回环端口和 Tailscale S
   optinfo-runtime/         专用 Harness profile 与运行文件
 ```
 
+`runtime/app/` 中需要同时部署仓库的 `backend/`、`content/` 和 `skills/`，三者保持同级。Harness 每次请求读取 `skills/optinfo-content/SKILL.md`；只更新 Python 代码会遗漏内容规则。期刊运行缓存写入数据库同级目录，更新代码时保留该缓存与用户数据。
+
 服务器使用北京时间。每日 timer 04:00 运行，启用 `Persistent=true` 以补跑停机错过的任务；重大事件另有周期任务。API 只使用一个 Uvicorn worker，由 SQLite WAL 和任务文件锁协调写入。失败来源独立记录，不以虚构条目填满版面。
 
 升级前备份 SQLite（使用 SQLite backup API）与私有配置。备份中包含私人收藏和聊天，不得发布。七天聊天清理针对在线库与 Harness 会话，若运维另建历史备份，也应给备份设置匹配的保留政策。
