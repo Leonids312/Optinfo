@@ -251,6 +251,91 @@ def collect(edition_date: str, sections: set[str] | None = None, *, industry_day
             unique[key] = item
     return list(unique.values()), sorted(diagnostics, key=lambda d: d["source"])
 
+def company_article(soup: BeautifulSoup, final_url: str, expected_title: str = ""):
+    """Extract article-owned blocks, never an arbitrary page body or footer.
+
+    These host/path-scoped selectors were checked on official releases. A known
+    template without its body (for example SK hynix media downloads) stays empty.
+    """
+    parsed = urlparse(final_url)
+    templates = [
+        ("www.intel.com", "/newsroom/news/", ".cmp-list-section__section-body"),
+        ("news.samsung.com", "/global/", ".single_contents"),
+        ("news.skhynix.com", "/en/", "article.type-post .post-contents"),
+        ("investors.micron.com", "/news/press-release/", ".evergreen-news-body"),
+        ("www.zeiss.com", "/smt-press-releases/", "main#content .text-block"),
+        ("www.hamamatsu.com", "/news/", ".news-details"),
+        ("www.ipgphotonics.com", "/newsroom/news/", ".stories-disc .content"),
+        ("www.trumpf.com", "/press-release-detail-page/release/", ".news .body-text, .news .u-text-content"),
+    ]
+    selector = next((selector for host, path, selector in templates
+                     if parsed.hostname == host and path in parsed.path), None)
+    if selector:
+        blocks = soup.select(selector)
+    else:
+        # Existing semantic news containers remain supported for NVIDIA, AMD,
+        # government releases, and other ordinary article templates.
+        blocks = soup.select("article, .article-body, .release-body, .main-body, #article, .TRS_Editor, #zoom, .news_detail, .news-detail, .detail_content, .content-area")[:1]
+    if blocks:
+        article = BeautifulSoup("<div></div>", "html.parser").div
+        for block in blocks:
+            article.append(BeautifulSoup(str(block), "html.parser"))
+        for node in article.select("script,style,nav,header,footer,aside,form,.related-posts,.related-content,.sec-bottom-contents,.post-share,.post-tags"):
+            node.decompose()
+        if len(article.get_text(" ", strip=True)) > 200:
+            return article
+
+    # Some CMS releases provide their full body as structured data. A description
+    # or unrelated @graph article must not be upgraded into source evidence.
+    def nodes(value):
+        if isinstance(value, dict):
+            yield value
+            for key in ("@graph", "mainEntity"):
+                yield from nodes(value.get(key))
+        elif isinstance(value, list):
+            for entry in value:
+                yield from nodes(entry)
+
+    def same_page(value):
+        if isinstance(value, dict):
+            value = value.get("@id") or value.get("url")
+        if not isinstance(value, str):
+            return False
+        target = urlparse(urljoin(final_url, value))
+        return (target.scheme in {"http", "https"} and target.hostname == parsed.hostname
+                and target.path.rstrip("/") == parsed.path.rstrip("/"))
+
+    title_key = re.sub(r"\W+", "", html.unescape(expected_title).casefold())
+    for script in soup.select('script[type="application/ld+json"]')[:12]:
+        if len(script.get_text()) > 300_000:
+            continue
+        try:
+            document = json.loads(script.get_text())
+        except (ValueError, TypeError):
+            continue
+        for node in nodes(document):
+            types = node.get("@type", [])
+            types = [types] if isinstance(types, str) else types
+            if not isinstance(types, list) or not {"Article", "NewsArticle", "BlogPosting"}.intersection(types):
+                continue
+            text = node.get("articleBody")
+            if not isinstance(text, str) or not 200 < len(text) <= 100_000:
+                continue
+            identities = [node.get("url"), node.get("mainEntityOfPage"), node.get("@id")]
+            supplied_identity = any(isinstance(value, (str, dict)) for value in identities)
+            headline = re.sub(r"\W+", "", html.unescape(str(node.get("headline", ""))).casefold())
+            if not any(same_page(value) for value in identities):
+                if supplied_identity or not title_key or headline != title_key:
+                    continue
+            article = BeautifulSoup("<div></div>", "html.parser").div
+            article.append(BeautifulSoup(text, "html.parser"))
+            for unwanted in article.select("script,style,nav,header,footer,aside,form"):
+                unwanted.decompose()
+            if len(article.get_text(" ", strip=True)) > 200:
+                return article
+    return None
+
+
 def enrich(item: dict) -> dict:
     """Read one shortlisted HTML article; keep abstract on any access failure.
 
@@ -286,6 +371,7 @@ def enrich(item: dict) -> dict:
             if value.startswith("https://") and ("pdf" in value.lower() or meta.get("name") == "citation_pdf_url"):
                 pdf_urls.append(value)
         math_count = preserve_math(soup)
+        corporate_body = company_article(soup, final_url, item["title"]) if item["section"] == "industry" else None
         for node in soup.select("script,style,nav,header,footer,aside,form"):
             node.decompose()
         blocked = any(marker in soup.get_text(" ", strip=True)[:5000].lower() for marker in ("verify you are human", "access denied", "captcha", "checking your browser"))
@@ -307,6 +393,8 @@ def enrich(item: dict) -> dict:
                     article = nature_article
             if article is None:
                 article = soup.select_one(".widget-ArticleFulltext")
+        elif item["section"] == "industry":
+            article = corporate_body
         else:
             article = soup.select_one("article, .article-body, .release-body, .main-body, #article, .TRS_Editor, #zoom, .news_detail, .news-detail, .detail_content, .content-area")
         if article and len(article.get_text(" ", strip=True)) > (1200 if item["section"] == "research" else 200):

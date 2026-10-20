@@ -129,6 +129,55 @@ def test_history_windows_do_not_recollect_other_sections_and_keep_one_global_cos
     assert len(editorial) == len(result["items"]) == 3
 
 
+def test_budget_audit_distinguishes_retrieval_attempts_and_unvisited_history(monkeypatch, editorial):
+    windows = []
+    entries = [news(f"company{number}") for number in range(18)]
+    def collect(day, sections=None, *, industry_days=7, **kwargs):
+        windows.append(industry_days)
+        return entries[:6] if industry_days == 7 else entries, [{"source": "fixture", "status": "ok"}]
+    def enrich(value):
+        index = int(value["id"].split("-")[0].removeprefix("company"))
+        return dict(value, evidence_text="short") if index % 3 != 0 else value
+    monkeypatch.setattr(pipeline, "collect", collect)
+    monkeypatch.setattr(pipeline, "enrich", enrich)
+    def analyze(value, *args):
+        editorial.append(value["id"])
+        return {"publish": False}
+    monkeypatch.setattr(pipeline, "analyze_candidate", analyze)
+    result = pipeline.generate_edition(DAY, [], industry_only=True)
+    assert windows == [7, 30] and len(editorial) == 6
+    audit = next(entry for entry in result["diagnostics"] if entry.get("source") == "selection")
+    assert audit == {"source": "selection", "status": "budget_exhausted",
+                     "enrich_attempts": 18, "model_calls": 6, "candidate_limit": 18,
+                     "last_industry_days": 30, "visited_industry_days": [7, 30],
+                     "unvisited_industry_days": [90, 365]}
+    assert len(result["reviewed_ids"]) == len(result["reviews"]) == 6
+    assert result["status"] == "ready"  # The audit, not this status, describes selection completeness.
+    assert all(entry["item"] in editorial for entry in result["reviews"])
+
+
+def test_exact_target_at_budget_limit_does_not_claim_budget_stopped_selection(monkeypatch, editorial):
+    entries = [news(f"company{number}") for number in range(3)]
+    monkeypatch.setenv("OPTINFO_MAX_CANDIDATES", "3")
+    monkeypatch.setattr(pipeline, "collect", lambda *args, **kwargs: (
+        entries, [{"source": "fixture", "status": "ok"}]))
+    monkeypatch.setattr(pipeline, "enrich", lambda value: value if value["id"] == "company2-1"
+                        else dict(value, evidence_text="short"))
+    result = pipeline.generate_edition(DAY, [], industry_only=True, industry_limit=1)
+    audit = next(entry for entry in result["diagnostics"] if entry.get("source") == "selection")
+    assert audit["enrich_attempts"] == 3 and audit["model_calls"] == 1
+    assert audit["status"] == "selection_stats" and audit["last_industry_days"] == 7
+    assert len(result["items"]) == 1
+
+
+def test_selection_audit_cannot_turn_all_failed_sources_into_success(monkeypatch, editorial):
+    monkeypatch.setattr(pipeline, "collect", lambda *args, **kwargs: (
+        [], [{"source": "fixture", "status": "failed", "error": "TimeoutError"}]))
+    with pytest.raises(pipeline.SourceCollectionUnavailable):
+        pipeline.generate_edition(DAY, [], industry_only=True)
+    assert editorial == []
+
+
 def test_source_identity_aliases_keep_original_ids():
     first = news("company")
     first.update(source_url="https://www.example.org/news/release/?utm_source=feed#top",
@@ -231,6 +280,9 @@ def test_fill_cli_preserves_partial_research_snapshots_bookmarks_and_chat(tmp_pa
     assert edition["metadata"]["diagnostics"] == metadata["diagnostics"]
     assert edition["metadata"]["topics"] == metadata["topics"]
     assert len(edition["metadata"]["industry_fill"]["added"]) == 3
+    saved_audit = next(entry for entry in edition["metadata"]["industry_fill"]["diagnostics"]
+                       if entry.get("source") == "selection")
+    assert saved_audit["enrich_attempts"] == saved_audit["model_calls"] == 3
     with db.connection() as conn:
         assert [tuple(row) for row in conn.execute("SELECT item_id,position,data_json FROM edition_items ORDER BY position LIMIT 2")] == snapshots
     assert db.get_item("paper")["bookmarked"] and db.get_chat("paper") == chat

@@ -39,6 +39,8 @@ cd backend
 
 期刊目录、分区依据和检索预算见 [JOURNAL_SOURCES.md](JOURNAL_SOURCES.md)，企业入口与历史窗口见 [INDUSTRY_SOURCES.md](INDUSTRY_SOURCES.md)。企业分区默认最多 4 条：优先不同公司各一条，按 7、30、90、365 天由近及远寻找未审核内容，仍不足时才允许同一公司第二条。DOI、规范化 URL、arXiv 编号和同公司近日期原始标题参与跨日期去重；成功发布与筛掉的候选持久记录，失败候选保留重试机会。
 
+每轮仍受候选数量上限约束。选择诊断记录正文尝试数、分析调用数，以及已访问和未访问的企业时间窗口；达到上限但未完成搜索时标记 `budget_exhausted`，不能把本轮正常结束理解为已检索完全部历史。
+
 部署扩容后可用 `python -m optinfo.cli fill-industry --date YYYY-MM-DD --industry-target 4` 补充**当天已有版次**的产业区。它只追加缺少的条数，保留原有快照、排序位置、生成时间、状态和研究重试记录；补充诊断单独存于 `metadata.industry_fill`。已达到目标时直接返回，不再调用模型。常规每日生成仍使用 `generate`。
 
 所有业务日期按 `Asia/Shanghai` 计算，与服务器操作系统时区无关。每日 04:00 的生成任务由部署层调度；失败后的补跑仍使用明确的版次日期。API 不启动重复的生成定时器。

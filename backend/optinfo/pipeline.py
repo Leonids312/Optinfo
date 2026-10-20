@@ -143,14 +143,15 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
     items, failures, companies, reviewed_ids, reviews = [], 0, {c["id"]: c for c in COMPANIES}, [], []
     known_keys = set(exclude_keys or ()) | {"id:" + item_id for item_id in (exclude_ids or ())}
     seen_keys, counts, group_attempts = set(), Counter(company_counts or {}), Counter()
-    attempted, model_failures, stopped = 0, 0, False
+    attempted, model_calls, model_failures, stopped, budget_exhausted = 0, 0, 0, False, False
+    industry_windows = [365 if retry_scope is not None else 7] if not major_only else []
 
     def eligible(raw):
         keys = canonical_source_keys(raw)
         return not (keys & known_keys or keys & seen_keys)
 
     def process(raw):
-        nonlocal failures, attempted, model_failures, stopped
+        nonlocal failures, attempted, model_calls, model_failures, stopped
         source_keys = canonical_source_keys(raw)
         if source_keys & known_keys or source_keys & seen_keys:
             return
@@ -175,6 +176,9 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
                                     "error": "InsufficientEvidence"})
                 return
             require_paper_evidence(candidate)
+            # Count editorial analyses separately from article retrieval attempts.
+            # The Harness's existing bounded output-repair retries are unchanged.
+            model_calls += 1
             analysis = analyze_candidate(candidate, labels, edition_date)
             item = sanitize_analysis(candidate, analysis, edition_date)
             reviewed_ids.append(candidate["id"])
@@ -209,11 +213,14 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
         return sum(item["section"] == section for item in items)
 
     def process_section(section):
+        nonlocal budget_exhausted
         pool = sorted((raw for raw in candidates if raw["section"] == section and eligible(raw)),
                       key=lambda raw: (score_candidate(raw, topic_ids), raw["published_at"]), reverse=True)
         planned = pool[:limits[section] + 2]
         for index, raw in enumerate(planned):
             if stopped or attempted >= max_candidates or section_count(section) >= limits[section]:
+                if not stopped and attempted >= max_candidates and section_count(section) < limits[section]:
+                    budget_exhausted = True
                 if stopped:
                     diagnostics.extend({"item": entry["id"], "status": "retry_deferred"}
                                        for entry in planned[index:index + max_candidates - attempted])
@@ -236,6 +243,8 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
                 diagnostics.append({"item": raw["id"], "status": "target_reached"})
             elif stopped or attempted >= max_candidates:
                 failures += 1
+                if not stopped and attempted >= max_candidates:
+                    budget_exhausted = True
                 diagnostics.append({"item": raw["id"], "status": "retry_deferred"})
             else:
                 process(raw)
@@ -246,9 +255,13 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
             industry_pool = {}
 
             def select_industry(per_company):
-                while not stopped and attempted < max_candidates and section_count("industry") < industry_limit:
+                nonlocal budget_exhausted
+                while not stopped and section_count("industry") < industry_limit:
                     pool = [raw for raw in industry_pool.values() if eligible(raw) and counts[company_group(raw)] < per_company]
                     if not pool:
+                        break
+                    if attempted >= max_candidates:
+                        budget_exhausted = True
                         break
                     # A source with many releases cannot monopolize the budget.
                     # Within each company the most recent release is read first.
@@ -257,12 +270,16 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
                     process(pool[0])
 
             for window in (7, 30, 90, 365):
-                if stopped or attempted >= max_candidates or section_count("industry") >= industry_limit:
+                if stopped or section_count("industry") >= industry_limit:
+                    break
+                if attempted >= max_candidates:
+                    budget_exhausted = True
                     break
                 if window == 7:
                     batch = candidates
                 else:
                     batch, audit = collect(edition_date, sections={"industry"}, industry_days=window, topic_ids=topic_ids)
+                    industry_windows.append(window)
                     diagnostics.extend({**entry, "industry_days": window} for entry in audit)
                 for raw in batch:
                     if raw["section"] == "industry":
@@ -276,6 +293,14 @@ def generate_edition(edition_date: str, topic_ids: list[str], *, major_only: boo
     if not any(entry["status"] == "ok" or
                (entry["status"] == "partial" and entry.get("count", 0) > 0) for entry in diagnostics):
         raise SourceCollectionUnavailable("All sources failed; existing editions remain unchanged")
+    diagnostics.append({
+        "source": "selection", "status": "budget_exhausted" if budget_exhausted else "selection_stats",
+        "enrich_attempts": attempted, "model_calls": model_calls, "candidate_limit": max_candidates,
+        "last_industry_days": industry_windows[-1] if industry_windows else None,
+        "visited_industry_days": industry_windows,
+        "unvisited_industry_days": [window for window in (7, 30, 90, 365) if window not in industry_windows]
+        if not major_only and retry_scope is None else [],
+    })
     return {"items": sorted(items, key=lambda i: (i["section"], -i["importance"])), "companies": list(companies.values()),
             "diagnostics": diagnostics, "status": "partial" if failures else "ready", "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
             "topic_ids": topic_ids, "reviewed_ids": reviewed_ids, "reviews": reviews}

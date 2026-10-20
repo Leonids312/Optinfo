@@ -45,7 +45,8 @@ INDUSTRY_SOURCES = [
            cards="tr", link="a[href*='/site/news_read/']", title=".title .t", published="td.date", years="a[href*='news?year=']"),
     source("samsung-semiconductors", "Samsung 半导体官方新闻", "samsung", "memory",
            "https://news.samsung.com/global/category/technology/semiconductors/feed", parser="rss", feed_paging=True),
-    source("sk-hynix", "SK hynix Newsroom", "sk-hynix", "memory", "https://news.skhynix.com/en/feed/", parser="rss", feed_paging=True),
+    source("sk-hynix", "SK hynix Newsroom", "sk-hynix", "memory", "https://news.skhynix.com/en/feed/",
+           parser="rss", feed_paging=True, exclude_categories=["media"]),
     source("micron", "Micron Newsroom", "micron", "memory", "https://www.micron.com/about/press/news",
            cards=".cmp-teaser__content", link="a.cmp-teaser__action-link", title="h2", published=".cmp-teaser__description",
            extra_hosts=["investors.micron.com"]),
@@ -123,6 +124,9 @@ def parse_page(spec: dict, body: str, final_url: str) -> dict:
         if not feed.entries:
             raise ValueError("Company feed has no entries")
         for entry in feed.entries[:80]:
+            categories = {str(tag.get("term", "")).casefold() for tag in entry.get("tags", [])}
+            if categories.intersection(spec.get("exclude_categories", [])):
+                continue
             url = entry.get("link", "")
             original_date = entry.get("published") or entry.get("dc_date") or ""
             if _official(url, spec):
